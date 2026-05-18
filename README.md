@@ -4,6 +4,10 @@ Voice-controlled coding agent that connects your browser microphone to OpenAI's 
 
 > 🇯🇵 日本語版: [README_jp.md](./README_jp.md)
 
+## Demo
+
+[![Demo video](https://img.youtube.com/vi/ga_jMpvLU9A/hqdefault.jpg)](https://www.youtube.com/watch?v=ga_jMpvLU9A)
+
 ## Architecture
 
 ```
@@ -84,6 +88,13 @@ server/             Node 22 / TypeScript backend
   src/session.ts           per-connection orchestrator
   src/index.ts             Express + ws + lifecycle
 ```
+
+## Disclaimer
+
+- **Sandbox is disabled.** Codex runs with `-c sandbox_mode=danger-full-access`, so it can read and write any file and execute arbitrary shell commands with your user's privileges. Run this only in an isolated or disposable environment (VM, container, throwaway machine) — never against a directory or machine whose data you cannot afford to lose.
+- **The voice approval flow is not a security boundary.** The deterministic policy filter plus spoken confirmation is best-effort UX, not a sandbox. It can be bypassed by prompt injection, misclassification, or model error. Do not rely on it to contain a malicious or malfunctioning agent.
+- **OpenAI API costs.** The Realtime API is billed by audio/token usage, and continuous microphone streaming can accumulate charges quickly. You are responsible for all usage on your `OPENAI_API_KEY`; monitor your usage and set spending limits.
+- **No warranty.** This software is provided "as is", without warranty of any kind. The authors are not liable for any damages, data loss, unintended code changes, or costs arising from its use.
 
 ## License
 

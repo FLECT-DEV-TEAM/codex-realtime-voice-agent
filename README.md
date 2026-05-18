@@ -4,6 +4,10 @@ Voice-controlled coding agent that connects your browser microphone to OpenAI's 
 
 > 🇯🇵 日本語版: [README_jp.md](./README_jp.md)
 
+## Demo
+
+[![Demo video](https://img.youtube.com/vi/ga_jMpvLU9A/hqdefault.jpg)](https://www.youtube.com/watch?v=ga_jMpvLU9A)
+
 ## Architecture
 
 ```

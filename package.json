@@ -1,0 +1,26 @@
+{
+    "name": "codex-realtime-voice-agent",
+    "version": "0.0.1",
+    "private": true,
+    "description": "SPA voice agent: browser ↔ Node server ↔ OpenAI Realtime API + Codex bridge. WebSocket audio + JSON control.",
+    "license": "MIT",
+    "type": "module",
+    "engines": {
+        "node": ">=22.13.0"
+    },
+    "scripts": {
+        "dev": "concurrently -k -n server,client -c blue,magenta \"pnpm --filter server dev\" \"pnpm --filter client dev\"",
+        "dev:server": "pnpm --filter server dev",
+        "dev:client": "pnpm --filter client dev",
+        "build": "pnpm --filter client build && pnpm --filter server build",
+        "typecheck": "pnpm -r typecheck",
+        "format": "prettier --write .",
+        "format:check": "prettier --check ."
+    },
+    "devDependencies": {
+        "concurrently": "^9.0.0",
+        "prettier": "^3.0.0",
+        "typescript": "^5.5.0"
+    },
+    "packageManager": "pnpm@10.29.3+sha512.498e1fb4cca5aa06c1dcf2611e6fafc50972ffe7189998c409e90de74566444298ffe43e6cd2acdc775ba1aa7cc5e092a8b7054c811ba8c5770f84693d33d2dc"
+}

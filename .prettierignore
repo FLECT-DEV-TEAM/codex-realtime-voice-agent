@@ -1,0 +1,8 @@
+node_modules/
+dist/
+build/
+.next/
+*.lock
+*.tgz
+pnpm-lock.yaml
+client/public/audio-worklet.js

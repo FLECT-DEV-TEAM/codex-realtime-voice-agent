@@ -1,0 +1,459 @@
+:root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --bg-elev: #161922;
+    --bg-elev2: #1e2230;
+    --border: #2a2f3e;
+    --fg: #e3e6ee;
+    --fg-dim: #9aa3b8;
+    --accent: #5aa9ff;
+    --accent-warn: #f5a623;
+    --accent-err: #ef5350;
+    --accent-ok: #4caf50;
+    font-family:
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        "Hiragino Kaku Gothic ProN",
+        "Noto Sans JP",
+        sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body,
+html,
+#root {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+}
+
+.app {
+    display: flex;
+    flex-direction: column;
+    /* Pin the app to the viewport height so inner scroll regions
+     * (transcript / progress-log) have a bounded parent to size
+     * themselves against, instead of growing the page indefinitely. */
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1.25rem;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+
+.app-header h1 {
+    font-size: 1.1rem;
+    margin: 0;
+    letter-spacing: 0.02em;
+}
+
+/*
+ * Body layout (flex-based so we don't have to fight grid's "1fr → 0px"
+ * collapse behaviour when the viewport gets narrow):
+ *
+ *   .app-body                       column flex
+ *     ├ .panel-row                  row flex, wraps when too narrow
+ *     │   ├ .panel--transcript          flex: 1 1 360px  (min/max height)
+ *     │   └ .panel--progress            flex: 1 1 360px
+ *     └ .panel-row                 single-item row (sits below)
+ *         └ .panel--settings            flex: 1 1 360px  (content height)
+ *
+ * Each panel has a min-height so that scrollable inner regions
+ * (transcript / progress-log) always have somewhere to render.
+ */
+.app-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    min-height: 0;
+    /* If the layout wraps to multiple rows on narrow viewports, let the
+     * whole body scroll rather than the page. */
+    overflow-y: auto;
+}
+
+.panel-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    /* Generic rows (e.g. the Settings row) size to their content. */
+    flex: none;
+    min-height: 0;
+}
+
+/* Transcript + Codex 進捗 row: take all leftover `.app-body` height rather
+ * than growing to the children's `max-height: min(100%, 60vh)` (which made
+ * the row overshoot the viewport — see Chrome DevTools diagnosis). On a
+ * narrow viewport the panels wrap to a vertical stack; the extra height
+ * then scrolls *inside* this row instead of spilling over the Settings
+ * row below it. */
+.panel-row--main {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.panel {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.panel h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+}
+
+.panel-meta {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--fg-dim);
+}
+
+/* Top row: each pane gets its own slice of the row.
+ *   - flex-basis 360px keeps them roughly proportional on wide screens
+ *   - min-width 280px prevents the inner content from being squeezed
+ *     to 0px when the parent flexes
+ *   - min-height 280px gives the scroll areas something to render
+ *   - max-height controls how tall a single panel may grow so its inner
+ *     scroll region (transcript / progress-log) kicks in instead of
+ *     pushing the layout (and the Settings panel below) off-screen.
+ *     `100%` works in the single-row layout (parent has a bounded
+ *     height); for the wrapped layout we fall back to a viewport-based
+ *     cap so each pane stays visible alongside Settings. */
+.panel--transcript,
+.panel--progress {
+    flex: 1 1 360px;
+    min-width: 280px;
+    min-height: 280px;
+    max-height: min(100%, 60vh);
+}
+
+/* Settings shares the same flex/min-width rule as the top panes so it
+ * lines up with them, but keeps its height content-driven (no
+ * min-height / max-height) — the form just needs to be fully visible,
+ * not a fixed-height scroll region. It lives in its own single-item
+ * `.panel-row--settings`, so flex-grow makes it span the full width. */
+.panel--settings {
+    flex: 1 1 360px;
+    min-width: 280px;
+}
+
+/* ------- connection ------- */
+
+.conn {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.conn-btn {
+    appearance: none;
+    border: none;
+    border-radius: 999px;
+    padding: 0.5rem 1.1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        background 0.15s,
+        transform 0.05s;
+}
+
+.conn-btn--start {
+    background: var(--accent);
+    color: #061325;
+}
+
+.conn-btn--stop {
+    background: var(--accent-err);
+    color: white;
+}
+
+.conn-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.conn-btn:active {
+    transform: translateY(1px);
+}
+
+.conn-status {
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+}
+
+.conn-status.is-active strong {
+    color: var(--accent-ok);
+}
+.conn-status.is-busy strong {
+    color: var(--accent-warn);
+}
+.conn-status.is-ready strong {
+    color: var(--accent);
+}
+.conn-status.is-error strong {
+    color: var(--accent-err);
+}
+
+.conn-msg--err {
+    color: var(--accent-err);
+}
+
+.conn-thread {
+    margin-left: 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+}
+
+/* ------- transcript ------- */
+
+.transcript,
+.progress-log {
+    flex: 1;
+    overflow-y: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+    line-height: 1.45;
+}
+
+.transcript-empty,
+.progress-empty {
+    color: var(--fg-dim);
+    font-style: italic;
+}
+
+.transcript-line {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+    word-break: break-word;
+}
+
+.transcript-tag {
+    flex: 0 0 auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    color: var(--fg-dim);
+    padding-top: 0.15rem;
+}
+
+.transcript-line--user .transcript-tag {
+    color: var(--accent);
+}
+.transcript-line--assistant .transcript-tag {
+    color: var(--accent-ok);
+}
+.transcript-line--approval {
+    background: rgba(245, 166, 35, 0.08);
+    border-left: 2px solid var(--accent-warn);
+    padding: 0.2rem 0.4rem;
+    border-radius: 2px;
+}
+.transcript-line--approval .transcript-tag {
+    color: var(--accent-warn);
+}
+
+/* ------- progress log ------- */
+
+.progress-line {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.15rem 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+}
+
+.progress-time {
+    flex: 0 0 auto;
+    color: var(--fg-dim);
+}
+
+.progress-line--info .progress-text {
+    color: var(--fg);
+}
+.progress-line--warn .progress-text {
+    color: var(--accent-warn);
+}
+.progress-line--error .progress-text {
+    color: var(--accent-err);
+}
+.progress-line--debug .progress-text {
+    color: var(--fg-dim);
+}
+
+/* Unified footer used by BOTH the transcript and progress panels so the
+ * Realtime-usage / Codex-context / status rows look identical. Sits
+ * below the scroll region, separated by a top border. */
+.panel-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--fg-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    line-height: 1.35;
+}
+
+.panel-footer-row {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.panel-footer-row--metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.9rem;
+}
+
+.panel-footer code {
+    background: var(--bg);
+    padding: 0.05rem 0.25rem;
+    border-radius: 3px;
+}
+
+/* ------- settings ------- */
+
+.settings {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+/* One row per logical group (STS / STT / instructions). */
+.settings-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.settings-group--column {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+}
+
+.settings-group-label {
+    flex: 0 0 auto;
+    width: 5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--accent);
+    text-align: right;
+    padding-right: 0.25rem;
+}
+
+.settings-group--column .settings-group-label {
+    width: auto;
+    text-align: left;
+    color: var(--fg-dim);
+    font-weight: 400;
+}
+
+.settings-field {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 0 0 auto;
+    min-width: 12rem;
+}
+
+.settings-field label {
+    flex: 0 0 auto;
+    font-size: 0.8rem;
+    color: var(--fg-dim);
+}
+
+.settings select,
+.settings textarea {
+    flex: 1;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.35rem 0.5rem;
+    font: inherit;
+}
+
+/* Pin select widths so changing the selected option doesn't reflow the row
+ * (which otherwise causes a visible flicker when neighbour widths shift).
+ * Long option labels are trimmed with an ellipsis to keep the box static. */
+.settings-field select {
+    flex: 0 0 12rem;
+    width: 12rem;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.settings textarea {
+    resize: vertical;
+    min-height: 3.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+}
+
+.settings-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.settings-actions button {
+    appearance: none;
+    background: var(--bg-elev2);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.settings-actions button:hover {
+    background: var(--border);
+}
+
+/* No legacy media query needed — `.panel-row { flex-wrap: wrap }` plus
+ * the panel min-widths handle every viewport width on their own. */

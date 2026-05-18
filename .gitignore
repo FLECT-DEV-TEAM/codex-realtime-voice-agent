@@ -1,0 +1,24 @@
+node_modules/
+dist/
+build/
+.cache/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# env files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# build / tarballs
+*.tgz
+*.tsbuildinfo
+
+# codex / runtime
+server/workspace/
+server/logs/

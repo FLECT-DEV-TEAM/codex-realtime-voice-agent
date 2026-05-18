@@ -1,0 +1,14 @@
+{
+    "extends": "../tsconfig.base.json",
+    "compilerOptions": {
+        "target": "ES2022",
+        "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"],
+        "jsx": "react-jsx",
+        "useDefineForClassFields": true,
+        "allowImportingTsExtensions": true,
+        "noEmit": true,
+        "skipLibCheck": true,
+        "types": ["vite/client"]
+    },
+    "include": ["src", "vite.config.ts"]
+}

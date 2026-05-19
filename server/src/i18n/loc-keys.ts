@@ -1,0 +1,27 @@
+export const LOC_KEYS = [
+    "server.error.websocket",
+    "server.error.invalidJson",
+    "server.error.sessionStartFailed",
+    "server.error.codexTransportClosed",
+    "server.progress.codexThreadStarted",
+    "server.progress.codexTransportError",
+    "server.progress.codexTransportClosed",
+    "server.progress.codexIdleWarning",
+    "server.progress.codexBridgeError",
+    "server.status.turnStarted",
+    "server.status.turnCompleted",
+    "server.status.textGenerating",
+    "server.status.reasoning",
+    "server.status.planning",
+    "server.status.outputStreaming",
+    "server.status.itemCompleted",
+    "server.status.errorContinuing",
+    "server.status.waiting",
+    "server.status.event",
+    "server.status.commandRunning",
+    "server.status.fileChanging",
+    "server.status.mcpRunning",
+    "server.status.itemStarted",
+] as const;
+
+export type LocKey = (typeof LOC_KEYS)[number];

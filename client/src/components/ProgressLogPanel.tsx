@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useSessionStore } from "../state/store.js";
-import { useT, useUiLocale } from "../i18n/index.js";
+import { renderLoc, useT, useUiLocale } from "../i18n/index.js";
 
 /**
  * Codex progress feed — auto-scroll, level-coloured rows.
@@ -59,13 +59,14 @@ export const ProgressLogPanel = () => {
                         <span className="progress-time">
                             {new Date(p.timestamp).toLocaleTimeString(uiLocale)}
                         </span>
-                        <span className="progress-text">{p.text}</span>
+                        <span className="progress-text">{renderLoc(uiLocale, p.body)}</span>
                     </div>
                 ))}
             </div>
             <div className="panel-footer">
                 <div className="panel-footer-row">
-                    {t("progress.status")} {status?.text ?? t("progress.waiting")}
+                    {t("progress.status")}{" "}
+                    {status ? renderLoc(uiLocale, { loc: status.loc }) : t("progress.waiting")}
                 </div>
                 <div className="panel-footer-row panel-footer-row--metrics">
                     <span>

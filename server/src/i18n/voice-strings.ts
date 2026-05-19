@@ -56,6 +56,7 @@ export interface VoiceStrings {
         cwd: string;
     };
     codexProgressPrefix: string;
+    idleEscalation: (seconds: number) => string;
 }
 
 export function buildSystemInstructions(lang: ConversationLanguage): string {
@@ -137,6 +138,7 @@ const jaStrings: VoiceStrings = {
         cwd: "作業ディレクトリ",
     },
     codexProgressPrefix: "[Codex 進捗]",
+    idleEscalation: (seconds) => `Codex から ${seconds} 秒間応答がありません。中断しますか?`,
 };
 
 const enStrings: VoiceStrings = {
@@ -207,6 +209,8 @@ const enStrings: VoiceStrings = {
         cwd: "Working directory",
     },
     codexProgressPrefix: "[Codex progress]",
+    idleEscalation: (seconds) =>
+        `Codex has not responded for ${seconds} seconds. Do you want to stop it?`,
 };
 
 const autoStrings: VoiceStrings = {

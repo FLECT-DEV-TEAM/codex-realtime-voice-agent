@@ -12,13 +12,15 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type {
     CodexTokenUsage,
+    Loc,
+    LocOrText,
     RealtimeUsage,
     SessionSettings,
     SessionState,
 } from "../types/messages.js";
 
 export interface CodexStatus {
-    text: string;
+    loc: Loc;
     turnStartedAt: number | null;
     lastEventAt: number | null;
 }
@@ -32,7 +34,7 @@ export interface TranscriptLine {
 
 export interface ProgressLine {
     id: string;
-    text: string;
+    body: LocOrText;
     level: "info" | "warn" | "error";
     timestamp: number;
     /** If true, this line was assembled from streaming deltas; the next
@@ -49,7 +51,7 @@ export interface ApprovalNotice {
 
 export interface SessionStore {
     state: SessionState;
-    statusMessage: string | null;
+    statusMessage: LocOrText | null;
     transcript: TranscriptLine[];
     progressLog: ProgressLine[];
     approvalNotices: ApprovalNotice[];
@@ -61,11 +63,11 @@ export interface SessionStore {
     realtimeUsage: { usage: RealtimeUsage; costUsd: number } | null;
     sessionId: string | null;
     logFile: string | null;
-    error: string | null;
+    error: LocOrText | null;
 
-    setState: (state: SessionState, message?: string | null) => void;
+    setState: (state: SessionState, message?: LocOrText | null) => void;
     appendTranscript: (role: "user" | "assistant", text: string) => void;
-    appendProgress: (text: string, level: ProgressLine["level"], streaming?: boolean) => void;
+    appendProgress: (body: LocOrText, level: ProgressLine["level"], streaming?: boolean) => void;
     appendApprovalNotice: (summary: string, kind: string) => void;
     setServerSettings: (
         settings: SessionSettings,
@@ -77,7 +79,7 @@ export interface SessionStore {
     setCodexStatus: (status: CodexStatus) => void;
     setCodexTokenUsage: (usage: CodexTokenUsage) => void;
     setRealtimeUsage: (usage: { usage: RealtimeUsage; costUsd: number }) => void;
-    setError: (message: string | null) => void;
+    setError: (message: LocOrText | null) => void;
     clearLogs: () => void;
 }
 
@@ -127,20 +129,30 @@ export const useSessionStore = create<SessionStore>((set) => ({
             };
         }),
 
-    appendProgress: (text, level, streaming) =>
+    appendProgress: (body, level, streaming) =>
         set((s) => {
             // Merge consecutive streaming deltas of the same level into one
             // line so Codex's character-by-character text output reads as a
             // single growing sentence instead of dozens of 1-token rows.
             const last = s.progressLog.at(-1);
-            if (streaming && last && last.streaming && last.level === level) {
-                const merged: ProgressLine = { ...last, text: last.text + text };
+            if (
+                streaming &&
+                last &&
+                last.streaming &&
+                last.level === level &&
+                "text" in last.body &&
+                "text" in body
+            ) {
+                const merged: ProgressLine = {
+                    ...last,
+                    body: { text: last.body.text + body.text },
+                };
                 return { progressLog: [...s.progressLog.slice(0, -1), merged] };
             }
             return {
                 progressLog: [
                     ...s.progressLog,
-                    { id: newId(), text, level, streaming, timestamp: Date.now() },
+                    { id: newId(), body, level, streaming, timestamp: Date.now() },
                 ].slice(-500),
             };
         }),

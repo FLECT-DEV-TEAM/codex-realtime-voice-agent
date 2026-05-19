@@ -37,6 +37,8 @@ import { buildSystemInstructions, getVoiceStrings } from "./i18n/voice-strings.j
 import type {
     ClientToServerMessage,
     CodexTokenUsage,
+    Loc,
+    LocOrText,
     RealtimeUsage,
     ServerToClientMessage,
     SessionSettings,
@@ -344,7 +346,12 @@ export class Session {
         console.error(`[session] id=${this.#logger.id} log=${this.#logger.file}`);
         ws.on("message", (data, isBinary) => this.#onWsMessage(data, isBinary));
         ws.on("close", () => this.#onWsClose());
-        ws.on("error", (err) => this.#emitError(`websocket error: ${err.message}`, false));
+        ws.on("error", (err) =>
+            this.#emitError(
+                { loc: { key: "server.error.websocket", params: { message: err.message } } },
+                false,
+            ),
+        );
         this.#emitSettings();
         this.#setState("idle");
     }
@@ -364,7 +371,7 @@ export class Session {
         try {
             parsed = JSON.parse(text) as ClientToServerMessage;
         } catch {
-            this.#emitError("invalid JSON from client", false);
+            this.#emitError({ loc: { key: "server.error.invalidJson" } }, false);
             return;
         }
         this.#logger.log("ws.in", parsed.type, parsed);
@@ -463,7 +470,7 @@ export class Session {
                         resolvedPaths,
                         hasDelete,
                     });
-                    this.#progress(`policy: ${policy.verdict} — ${policy.summary}`);
+                    this.#progress({ text: `policy: ${policy.verdict} — ${policy.summary}` });
                     if (policy.verdict === "auto-accept") return { decision: "accept" };
                     if (policy.verdict === "auto-refuse") return { decision: "refuse" };
                     if (!this.#voiceCoordinator) return { decision: "refuse" };
@@ -585,7 +592,12 @@ export class Session {
             } as never)) as { thread: { id: string } };
             this.#threadId = startResult.thread.id;
             this.#emitSettings();
-            this.#progress(`Codex thread ${this.#threadId} started`);
+            this.#progress({
+                loc: {
+                    key: "server.progress.codexThreadStarted",
+                    params: { threadId: this.#threadId },
+                },
+            });
 
             // ----- Voice provider -----
             const voiceProvider = this.#settings.voiceProvider ?? "openai";
@@ -721,7 +733,7 @@ export class Session {
                 // It's harmless and noisy — drop it from the progress log.
                 // The raw event is still in the JSONL log for inspection.
                 if (err.message.includes("response_cancel_not_active")) return;
-                this.#progress(`realtime error: ${err.message}`, "error");
+                this.#progress({ text: `realtime error: ${err.message}` }, "error");
             });
             this.#realtime.on("raw", (event) => {
                 const t = event.type as string | undefined;
@@ -785,13 +797,21 @@ export class Session {
             });
 
             await this.#realtime.connect();
-            this.#progress(
-                `Realtime session open (provider=${voiceProvider}, model=${model}, voice=${voice}, inputRate=${this.#realtime.inputSampleRate}, preamble=${voiceProvider === "openai" && supportsPreamble(model) ? "on" : "off"})`,
-            );
+            this.#progress({
+                text: `Realtime session open (provider=${voiceProvider}, model=${model}, voice=${voice}, inputRate=${this.#realtime.inputSampleRate}, preamble=${voiceProvider === "openai" && supportsPreamble(model) ? "on" : "off"})`,
+            });
 
             this.#setState("active");
         } catch (err) {
-            this.#emitError(`session start failed: ${(err as Error).message}`, true);
+            this.#emitError(
+                {
+                    loc: {
+                        key: "server.error.sessionStartFailed",
+                        params: { message: (err as Error).message },
+                    },
+                },
+                true,
+            );
             await this.stop();
         }
     };
@@ -846,7 +866,15 @@ export class Session {
 
     #onCodexTransportError(err: Error): void {
         this.#logger.log("transport", "error", { message: err.message, stack: err.stack });
-        this.#progress(`[Codex Transport] エラー: ${err.message}`, "error");
+        this.#progress(
+            {
+                loc: {
+                    key: "server.progress.codexTransportError",
+                    params: { message: err.message },
+                },
+            },
+            "error",
+        );
         this.#onCodexTransportClose();
     }
 
@@ -860,9 +888,9 @@ export class Session {
             return;
         }
         this.#logger.log("transport", "unexpected-close");
-        this.#progress("[Codex Transport] プロセスが予期せず終了しました", "error");
+        this.#progress({ loc: { key: "server.progress.codexTransportClosed" } }, "error");
         this.#transportDeadReported = true;
-        this.#emitError("Codex bridge transport closed unexpectedly", true);
+        this.#emitError({ loc: { key: "server.error.codexTransportClosed" } }, true);
         void this.stop();
     }
 
@@ -1017,15 +1045,15 @@ export class Session {
         let lastEventAt: number | null = null;
         let lastThrottledStatusAt = 0;
         const idleMs = this.#turnIdleTimeoutMs;
-        const sendCodexStatus = (text: string, throttle = false): void => {
+        const sendCodexStatus = (loc: Loc, throttle = false): void => {
             const now = Date.now();
             if (throttle) {
                 if (now - lastThrottledStatusAt < 500) return;
                 lastThrottledStatusAt = now;
             }
-            this.#send({ type: "codex/status", text, turnStartedAt, lastEventAt });
+            this.#send({ type: "codex/status", loc, turnStartedAt, lastEventAt });
         };
-        const summarizeItemStarted = (item: unknown): string => {
+        const summarizeItemStarted = (item: unknown): Loc => {
             const wrap = item as {
                 item?: {
                     type?: string;
@@ -1037,18 +1065,23 @@ export class Session {
                 };
             };
             const inner = wrap?.item;
-            if (!inner) return "項目開始: ?";
+            if (!inner) return { key: "server.status.itemStarted", params: { type: "?" } };
             const itemType = inner?.type ?? "?";
             if (itemType === "commandExecution") {
                 const command = typeof inner.command === "string" ? inner.command : "?";
-                return `コマンド実行中: ${command.slice(0, 60)}`;
+                return {
+                    key: "server.status.commandRunning",
+                    params: { command: command.slice(0, 60) },
+                };
             }
             if (itemType === "fileChange") {
                 const changes = Array.isArray(inner.changes) ? inner.changes : [];
                 const firstPath =
                     typeof changes[0]?.path === "string" ? path.basename(changes[0].path) : "?";
-                const rest = changes.length > 1 ? ` 外 ${changes.length - 1} 件` : "";
-                return `ファイル変更中: ${firstPath}${rest}`;
+                return {
+                    key: "server.status.fileChanging",
+                    params: { path: firstPath, count: changes.length },
+                };
             }
             if (itemType === "mcpToolCall") {
                 const name =
@@ -1057,9 +1090,9 @@ export class Session {
                         : typeof inner.tool === "string"
                           ? inner.tool
                           : "?";
-                return `MCP tool 実行中: ${name}`;
+                return { key: "server.status.mcpRunning", params: { name } };
             }
-            return `項目開始: ${itemType}`;
+            return { key: "server.status.itemStarted", params: { type: String(itemType) } };
         };
         const bestEffort = (
             op: Promise<unknown> | undefined,
@@ -1102,10 +1135,18 @@ export class Session {
                 this.#idleEscalationActive = true;
                 void (async () => {
                     try {
-                        const summary = `Codex から ${Math.round(
-                            idleMs / 1000,
-                        )} 秒間応答がありません。中断しますか?`;
-                        this.#progress(`[Codex 警告] ${summary} (音声で確認します)`, "warn");
+                        const seconds = Math.round(idleMs / 1000);
+                        const strings = getVoiceStrings(this.#activeConversationLanguage);
+                        const summary = strings.idleEscalation(seconds);
+                        this.#progress(
+                            {
+                                loc: {
+                                    key: "server.progress.codexIdleWarning",
+                                    params: { seconds },
+                                },
+                            },
+                            "warn",
+                        );
                         const decision = await voiceCoordinator.escalate(summary);
                         this.#idleEscalationActive = false;
                         this.#logger.log("session", "turn-idle-timeout-decision", {
@@ -1142,7 +1183,7 @@ export class Session {
         try {
             const effort = this.#settings.codexReasoningEffort;
             this.#logger.log("bridge", "turn-start", { message, effort });
-            this.#progress(`→ Codex: ${message}`, "info");
+            this.#progress({ text: `→ Codex: ${message}` }, "info");
             const turnArgs: Record<string, unknown> = {
                 threadId: this.#threadId,
                 input: [{ type: "text", text: message, text_elements: [] }],
@@ -1166,7 +1207,7 @@ export class Session {
                 switch (ev.type) {
                     case "turn-started": {
                         turnStartedAt = Date.now();
-                        sendCodexStatus("ターン開始");
+                        sendCodexStatus({ key: "server.status.turnStarted" });
                         // bridge payload shape is { type, turn: { threadId, turn: { id, ... } } }
                         // — the inner `turn` is the real Turn object.
                         const wrap = ev.turn as { turn?: { id?: unknown } } | undefined;
@@ -1176,27 +1217,27 @@ export class Session {
                         break;
                     }
                     case "turn-completed":
-                        sendCodexStatus("ターン完了");
+                        sendCodexStatus({ key: "server.status.turnCompleted" });
                         sawTurnCompleted = true;
                         this.#send({ type: "codex/turn", turnId: null });
                         break;
                     case "text-delta":
                         if (ev.kind === "text") {
-                            sendCodexStatus("テキスト生成中", true);
+                            sendCodexStatus({ key: "server.status.textGenerating" }, true);
                         } else if (ev.kind === "reasoning" || ev.kind === "reasoning-summary") {
-                            sendCodexStatus("推論中", true);
+                            sendCodexStatus({ key: "server.status.reasoning" }, true);
                         } else if (ev.kind === "plan") {
-                            sendCodexStatus("計画立案中");
+                            sendCodexStatus({ key: "server.status.planning" });
                         }
                         if (ev.kind === "text" && typeof ev.text === "string") {
                             accum.push(ev.text);
-                            this.#progress(ev.text, "info", true);
+                            this.#progress({ text: ev.text }, "info", true);
                             pendingNarrative += ev.text;
                             flushNarrativeIfReady(false);
                         }
                         break;
                     case "item-output-delta":
-                        sendCodexStatus("出力ストリーム中", true);
+                        sendCodexStatus({ key: "server.status.outputStreaming" }, true);
                         break;
                     case "item-started":
                     case "item-completed": {
@@ -1212,7 +1253,7 @@ export class Session {
                         sendCodexStatus(
                             ev.type === "item-started"
                                 ? summarizeItemStarted(ev.item)
-                                : "(項目完了)",
+                                : { key: "server.status.itemCompleted" },
                         );
                         if (
                             ev.type === "item-started" &&
@@ -1234,21 +1275,29 @@ export class Session {
                         break;
                     }
                     case "error":
-                        sendCodexStatus("エラー (継続)");
+                        sendCodexStatus({ key: "server.status.errorContinuing" });
                         flushNarrativeIfReady(true);
                         {
                             const errMsg = (ev.error as { message?: unknown })?.message;
+                            const detail =
+                                typeof errMsg === "string" && errMsg ? errMsg : "(no detail)";
                             this.#logger.log("bridge", "non-fatal-error", ev.error);
                             this.#progress(
-                                `[Codex 警告] bridge error: ${
-                                    typeof errMsg === "string" && errMsg ? errMsg : "(no detail)"
-                                }`,
+                                {
+                                    loc: {
+                                        key: "server.progress.codexBridgeError",
+                                        params: { message: detail },
+                                    },
+                                },
                                 "warn",
                             );
                         }
                         break;
                     default:
-                        sendCodexStatus(`event: ${ev.type}`);
+                        sendCodexStatus({
+                            key: "server.status.event",
+                            params: { type: ev.type },
+                        });
                         break;
                 }
             }
@@ -1282,7 +1331,7 @@ export class Session {
             this.#send({ type: "codex/turn", turnId: null });
             this.#send({
                 type: "codex/status",
-                text: "待機中",
+                loc: { key: "server.status.waiting" },
                 turnStartedAt: null,
                 lastEventAt: null,
             });
@@ -1296,7 +1345,7 @@ export class Session {
 
     // ---- helpers ----------------------------------------------------------
 
-    #setState(state: SessionState, message?: string): void {
+    #setState(state: SessionState, message?: LocOrText): void {
         const prev = this.#state;
         this.#state = state;
         this.#logger.log("session", "state-change", { from: prev, to: state, message });
@@ -1364,13 +1413,17 @@ export class Session {
         return result;
     };
 
-    #emitError(message: string, fatal: boolean): void {
-        this.#send({ type: "error", message, fatal });
-        if (fatal) this.#setState("error", message);
+    #emitError(body: LocOrText, fatal: boolean): void {
+        this.#send({ type: "error", body, fatal });
+        if (fatal) this.#setState("error", body);
     }
 
-    #progress(text: string, level: "info" | "warn" | "error" = "info", streaming?: boolean): void {
-        this.#send({ type: "codex/progress", text, level, streaming });
+    #progress(
+        body: LocOrText,
+        level: "info" | "warn" | "error" = "info",
+        streaming?: boolean,
+    ): void {
+        this.#send({ type: "codex/progress", body, level, streaming });
     }
 
     #send(msg: ServerToClientMessage): void {

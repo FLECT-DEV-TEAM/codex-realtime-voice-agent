@@ -59,7 +59,7 @@ export const App = () => {
         if (audioRef.current || wsRef.current) return;
         clearLogs();
         setError(null);
-        setState("connecting", t("app.connecting"));
+        setState("connecting", { loc: { key: "app.connecting" } });
 
         try {
             // 1. Open audio first (mic permission prompt may appear).
@@ -85,7 +85,7 @@ export const App = () => {
                             appendTranscript(msg.role, msg.text);
                             return;
                         case "codex/progress":
-                            appendProgress(msg.text, msg.level, msg.streaming);
+                            appendProgress(msg.body, msg.level, msg.streaming);
                             return;
                         case "codex/turn":
                             setCodexTurnId(msg.turnId);
@@ -116,23 +116,29 @@ export const App = () => {
                             );
                             return;
                         case "error":
-                            setError(msg.message);
+                            setError(msg.body);
                             if (msg.fatal) void stop();
                             return;
                     }
                 },
                 onAudio: (pcm) => audio.enqueuePlayback(pcm),
                 onClose: () => {
-                    setState("stopped", t("app.connectionClosed"));
+                    setState("stopped", { loc: { key: "app.connectionClosed" } });
                     void stop();
                 },
-                onError: () => setError(t("app.error.websocket")),
+                onError: () => setError({ loc: { key: "app.error.websocket" } }),
             });
             ws.connect(wsUrl);
             wsRef.current = ws;
         } catch (err) {
-            setError(t("app.error.connectFailed", { message: (err as Error).message }));
-            setState("error", (err as Error).message);
+            const body = {
+                loc: {
+                    key: "app.error.connectFailed",
+                    params: { message: (err as Error).message },
+                },
+            } as const;
+            setError(body);
+            setState("error", body);
             await stop();
         }
     };

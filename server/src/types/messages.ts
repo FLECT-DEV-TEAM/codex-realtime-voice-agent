@@ -13,6 +13,11 @@
  *     {@link ServerToClientMessage}, distinguished by the `type` field.
  */
 
+import type { LocKey } from "../i18n/loc-keys.js";
+
+export type Loc = { key: LocKey; params?: Record<string, string | number> };
+export type LocOrText = { text: string } | { loc: Loc };
+
 /** All messages the browser sends to the server (text frames). */
 export type ClientToServerMessage =
     | { type: "session/start"; settings?: Partial<SessionSettings> }
@@ -21,11 +26,11 @@ export type ClientToServerMessage =
 
 /** All messages the server sends to the browser (text frames). */
 export type ServerToClientMessage =
-    | { type: "session/status"; state: SessionState; message?: string }
+    | { type: "session/status"; state: SessionState; message?: LocOrText }
     | { type: "transcript"; role: "user" | "assistant"; text: string; final: boolean }
     | {
           type: "codex/progress";
-          text: string;
+          body: LocOrText;
           level: "info" | "warn" | "error";
           /** True for partial text-delta chunks that the UI should append
            *  to the previous streaming line instead of starting a new row. */
@@ -33,8 +38,8 @@ export type ServerToClientMessage =
       }
     | {
           type: "codex/status";
-          /** Human-readable summary of the current Codex activity. */
-          text: string;
+          /** Localizable summary of the current Codex activity. */
+          loc: Loc;
           /** Wallclock ms when the current turn started (null when no turn is active). */
           turnStartedAt: number | null;
           /** Wallclock ms of the most recent bridge event (null when no turn is active). */
@@ -52,7 +57,7 @@ export type ServerToClientMessage =
           sessionId?: string;
           logFile?: string;
       }
-    | { type: "error"; message: string; fatal: boolean };
+    | { type: "error"; body: LocOrText; fatal: boolean };
 
 export type CodexTokenUsageBreakdown = {
     totalTokens: number;

@@ -1,5 +1,5 @@
 import { useSessionStore } from "../state/store.js";
-import { useT, type MessageKey } from "../i18n/index.js";
+import { renderLoc, useT, useUiLocale, type MessageKey } from "../i18n/index.js";
 
 interface Props {
     onStart: () => void;
@@ -28,6 +28,7 @@ const STATE_CLASS: Record<string, string> = {
 
 export const ConnectionControls = ({ onStart, onStop }: Props) => {
     const t = useT();
+    const uiLocale = useUiLocale();
     const state = useSessionStore((s) => s.state);
     const statusMessage = useSessionStore((s) => s.statusMessage);
     const error = useSessionStore((s) => s.error);
@@ -48,8 +49,12 @@ export const ConnectionControls = ({ onStart, onStop }: Props) => {
             </button>
             <div className={`conn-status ${STATE_CLASS[state] ?? ""}`}>
                 <strong>{STATE_LABEL_KEY[state] ? t(STATE_LABEL_KEY[state]) : state}</strong>
-                {statusMessage && <span className="conn-msg"> — {statusMessage}</span>}
-                {error && <span className="conn-msg conn-msg--err"> ⚠ {error}</span>}
+                {statusMessage && (
+                    <span className="conn-msg"> — {renderLoc(uiLocale, statusMessage)}</span>
+                )}
+                {error && (
+                    <span className="conn-msg conn-msg--err"> ⚠ {renderLoc(uiLocale, error)}</span>
+                )}
                 {sessionId && (
                     <span className="conn-thread" title={logFile ?? undefined}>
                         {" "}

@@ -27,6 +27,10 @@ import {
 import { classifyApproval } from "./approval-policy.js";
 import { VoiceApprovalCoordinator } from "./voice-approval.js";
 import { SessionLogger } from "./session-logger.js";
+import {
+    normalizeConversationLanguage,
+    type ConversationLanguage,
+} from "./i18n/conversation-language.js";
 import type {
     ClientToServerMessage,
     CodexTokenUsage,
@@ -283,6 +287,12 @@ export class Session {
     readonly #ws: WS;
     #state: SessionState = "idle";
     #settings: SessionSettings;
+    #activeConversationLanguage: ConversationLanguage = "auto";
+
+    get activeConversationLanguage(): ConversationLanguage {
+        return this.#activeConversationLanguage;
+    }
+
     #bridge: CodexBridge | null = null;
     #tokenUsageSub: NotificationSubscription | null = null;
     #transportSubs: NotificationSubscription[] = [];
@@ -409,6 +419,9 @@ export class Session {
         if (this.#state !== "idle" && this.#state !== "stopped" && this.#state !== "error") {
             return;
         }
+        this.#activeConversationLanguage = normalizeConversationLanguage(
+            this.#settings.transcriptionLanguage,
+        );
         this.#stopPromise = null;
         this.#stoppingGracefully = false;
         this.#sessionGeneration += 1;

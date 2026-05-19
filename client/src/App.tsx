@@ -7,6 +7,7 @@ import { AudioManager } from "./audio/audio-manager.js";
 import { VoiceWsClient } from "./ws/client.js";
 import { useSessionStore, useSettingsStore } from "./state/store.js";
 import { buildSessionSettingsFromStore } from "./state/session-settings.js";
+import { useT } from "./i18n/index.js";
 
 /**
  * Top-level component. Owns the AudioManager + VoiceWsClient lifecycle and
@@ -14,6 +15,7 @@ import { buildSessionSettingsFromStore } from "./state/session-settings.js";
  * those stores.
  */
 export const App = () => {
+    const t = useT();
     const audioRef = useRef<AudioManager | null>(null);
     const wsRef = useRef<VoiceWsClient | null>(null);
 
@@ -57,7 +59,7 @@ export const App = () => {
         if (audioRef.current || wsRef.current) return;
         clearLogs();
         setError(null);
-        setState("connecting", "WebSocket / mic を準備中...");
+        setState("connecting", t("app.connecting"));
 
         try {
             // 1. Open audio first (mic permission prompt may appear).
@@ -121,15 +123,15 @@ export const App = () => {
                 },
                 onAudio: (pcm) => audio.enqueuePlayback(pcm),
                 onClose: () => {
-                    setState("stopped", "サーバとの接続が閉じました");
+                    setState("stopped", t("app.connectionClosed"));
                     void stop();
                 },
-                onError: () => setError("WebSocket error"),
+                onError: () => setError(t("app.error.websocket")),
             });
             ws.connect(wsUrl);
             wsRef.current = ws;
         } catch (err) {
-            setError(`接続に失敗: ${(err as Error).message}`);
+            setError(t("app.error.connectFailed", { message: (err as Error).message }));
             setState("error", (err as Error).message);
             await stop();
         }
@@ -181,12 +183,12 @@ export const App = () => {
             <div className="app-body">
                 <div className="panel-row panel-row--main">
                     <section className="panel panel--transcript">
-                        <h2>Transcript</h2>
+                        <h2>{t("app.panel.transcript")}</h2>
                         <TranscriptPanel />
                     </section>
                     <section className="panel panel--progress">
                         <h2>
-                            Codex 進捗
+                            {t("app.panel.progress")}
                             {codexThreadId && (
                                 <small className="panel-meta" title={codexThreadId}>
                                     {" "}
@@ -205,7 +207,7 @@ export const App = () => {
                 </div>
                 <div className="panel-row">
                     <section className="panel panel--settings">
-                        <h2>Settings</h2>
+                        <h2>{t("app.panel.settings")}</h2>
                         <SettingsPanel />
                     </section>
                 </div>

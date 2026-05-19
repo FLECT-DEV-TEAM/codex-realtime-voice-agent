@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useSessionStore } from "../state/store.js";
+import { useT, useUiLocale } from "../i18n/index.js";
 
 /**
  * Codex progress feed — auto-scroll, level-coloured rows.
  */
 export const ProgressLogPanel = () => {
+    const t = useT();
+    const uiLocale = useUiLocale();
     const progress = useSessionStore((s) => s.progressLog);
     const status = useSessionStore((s) => s.codexStatus);
     const codexTokenUsage = useSessionStore((s) => s.codexTokenUsage);
@@ -49,38 +52,47 @@ export const ProgressLogPanel = () => {
         <>
             <div className="progress-log" ref={ref} onScroll={onScroll}>
                 {progress.length === 0 && (
-                    <div className="progress-empty">Codex はまだ動いていません。</div>
+                    <div className="progress-empty">{t("progress.empty")}</div>
                 )}
                 {progress.map((p) => (
                     <div className={`progress-line progress-line--${p.level}`} key={p.id}>
                         <span className="progress-time">
-                            {new Date(p.timestamp).toLocaleTimeString()}
+                            {new Date(p.timestamp).toLocaleTimeString(uiLocale)}
                         </span>
                         <span className="progress-text">{p.text}</span>
                     </div>
                 ))}
             </div>
             <div className="panel-footer">
-                <div className="panel-footer-row">ステータス: {status?.text ?? "待機中"}</div>
+                <div className="panel-footer-row">
+                    {t("progress.status")} {status?.text ?? t("progress.waiting")}
+                </div>
                 <div className="panel-footer-row panel-footer-row--metrics">
-                    <span>turn 経過: {turnElapsedSec ?? "—"} 秒</span>
-                    <span>Codex 無応答: {idleElapsedSec ?? "—"} 秒</span>
+                    <span>
+                        {t("progress.turnElapsed")} {turnElapsedSec ?? "-"} {t("progress.seconds")}
+                    </span>
+                    <span>
+                        {t("progress.codexIdle")} {idleElapsedSec ?? "-"} {t("progress.seconds")}
+                    </span>
                 </div>
                 {codexTokenUsage && (
                     <div className="panel-footer-row">
-                        Codex コンテキスト:{" "}
+                        {t("progress.context")}{" "}
                         <code>
-                            {ctxInput.toLocaleString()} /{" "}
-                            {ctxWindow !== null ? ctxWindow.toLocaleString() : "上限不明"}
+                            {ctxInput.toLocaleString(uiLocale)} /{" "}
+                            {ctxWindow !== null
+                                ? ctxWindow.toLocaleString(uiLocale)
+                                : t("progress.unknownLimit")}
                         </code>{" "}
-                        トークン
+                        {t("progress.tokens")}
                         {ctxPercent ? (
                             <>
                                 {" "}
                                 (<code>{ctxPercent}%</code>)
                             </>
                         ) : null}{" "}
-                        累計 <code>{ctxCumulative.toLocaleString()}</code> トークン
+                        {t("progress.cumulative")}{" "}
+                        <code>{ctxCumulative.toLocaleString(uiLocale)}</code> {t("progress.tokens")}
                     </div>
                 )}
             </div>

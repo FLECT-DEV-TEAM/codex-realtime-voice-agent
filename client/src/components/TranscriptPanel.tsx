@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useSessionStore } from "../state/store.js";
+import { useT, useUiLocale } from "../i18n/index.js";
 
 /**
  * Scrolling transcript. Auto-scrolls to bottom when new content arrives
@@ -8,6 +9,8 @@ import { useSessionStore } from "../state/store.js";
  * Realtime token usage + estimated cost.
  */
 export const TranscriptPanel = () => {
+    const t = useT();
+    const uiLocale = useUiLocale();
     const transcript = useSessionStore((s) => s.transcript);
     const approvals = useSessionStore((s) => s.approvalNotices);
     const realtimeUsage = useSessionStore((s) => s.realtimeUsage);
@@ -39,7 +42,7 @@ export const TranscriptPanel = () => {
         <>
             <div className="transcript" ref={listRef} onScroll={onScroll}>
                 {merged.length === 0 && (
-                    <div className="transcript-empty">まだ会話はありません。</div>
+                    <div className="transcript-empty">{t("transcript.empty")}</div>
                 )}
                 {merged.map((item) => {
                     if (item._kind === "approval") {
@@ -48,7 +51,7 @@ export const TranscriptPanel = () => {
                                 className="transcript-line transcript-line--approval"
                                 key={item.id}
                             >
-                                <span className="transcript-tag">[approval]</span>
+                                <span className="transcript-tag">{t("transcript.approval")}</span>
                                 <span>{item.summary}</span>
                             </div>
                         );
@@ -59,7 +62,9 @@ export const TranscriptPanel = () => {
                             key={item.id}
                         >
                             <span className="transcript-tag">
-                                {item.role === "user" ? "you" : "agent"}
+                                {item.role === "user"
+                                    ? t("transcript.role.user")
+                                    : t("transcript.role.agent")}
                             </span>
                             <span>{item.text}</span>
                         </div>
@@ -69,27 +74,32 @@ export const TranscriptPanel = () => {
             {realtimeUsage && rt && (
                 <div className="panel-footer">
                     <div className="panel-footer-row">
-                        Realtime: 累計 <code>{rt.totalTokens.toLocaleString()}</code> トークン 約{" "}
+                        {t("transcript.footer.realtime")} {t("transcript.footer.cumulative")}{" "}
+                        <code>{rt.totalTokens.toLocaleString(uiLocale)}</code>{" "}
+                        {t("transcript.footer.tokens")} {t("transcript.footer.approx")}{" "}
                         <code>${realtimeUsage.costUsd.toFixed(4)}</code>
                     </div>
                     <div className="panel-footer-row">
-                        入力: text{" "}
+                        {t("transcript.footer.input")} text{" "}
                         <code>
                             {Math.max(
                                 0,
                                 rt.inputTextTokens - rt.inputCachedTextTokens,
-                            ).toLocaleString()}
+                            ).toLocaleString(uiLocale)}
                         </code>{" "}
-                        (cached <code>{rt.inputCachedTextTokens.toLocaleString()}</code>) / audio{" "}
+                        ({t("transcript.footer.cached")}{" "}
+                        <code>{rt.inputCachedTextTokens.toLocaleString(uiLocale)}</code>) / audio{" "}
                         <code>
                             {Math.max(
                                 0,
                                 rt.inputAudioTokens - rt.inputCachedAudioTokens,
-                            ).toLocaleString()}
+                            ).toLocaleString(uiLocale)}
                         </code>{" "}
-                        (cached <code>{rt.inputCachedAudioTokens.toLocaleString()}</code>){" "}出力:
-                        text <code>{rt.outputTextTokens.toLocaleString()}</code> / audio{" "}
-                        <code>{rt.outputAudioTokens.toLocaleString()}</code>
+                        ({t("transcript.footer.cached")}{" "}
+                        <code>{rt.inputCachedAudioTokens.toLocaleString(uiLocale)}</code>){" "}
+                        {t("transcript.footer.output")} text{" "}
+                        <code>{rt.outputTextTokens.toLocaleString(uiLocale)}</code> / audio{" "}
+                        <code>{rt.outputAudioTokens.toLocaleString(uiLocale)}</code>
                     </div>
                 </div>
             )}

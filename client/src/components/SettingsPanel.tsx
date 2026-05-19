@@ -1,4 +1,6 @@
 import { useSettingsStore } from "../state/store.js";
+import { useT, type MessageKey } from "../i18n/index.js";
+import { useUiStore, type UiLocale } from "../state/ui-store.js";
 
 const OPENAI_MODELS = ["gpt-realtime-2", "gpt-realtime-1.5", "gpt-realtime", "gpt-realtime-mini"];
 const GEMINI_MODELS = [
@@ -19,26 +21,30 @@ const OPENAI_VOICES = [
 ];
 const GEMINI_VOICES = ["Kore"];
 const TRANSCRIPTION_MODELS = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1"];
-const TRANSCRIPTION_LANGUAGES: Array<{ value: string; label: string }> = [
-    { value: "", label: "(自動判定)" },
-    { value: "ja", label: "日本語 (ja)" },
-    { value: "en", label: "English (en)" },
-    { value: "ko", label: "한국어 (ko)" },
-    { value: "zh", label: "中文 (zh)" },
-    { value: "es", label: "Español (es)" },
-    { value: "fr", label: "Français (fr)" },
-    { value: "de", label: "Deutsch (de)" },
+const UI_LANGUAGES: Array<{ value: UiLocale; labelKey: MessageKey }> = [
+    { value: "en", labelKey: "settings.uiLanguage.en" },
+    { value: "ja", labelKey: "settings.uiLanguage.ja" },
 ];
-const NOISE_REDUCTION: Array<{ value: string; label: string }> = [
-    { value: "near_field", label: "near_field (近接/ヘッドセット)" },
-    { value: "far_field", label: "far_field (ノートPC/会議室)" },
-    { value: "off", label: "off (無効)" },
+const TRANSCRIPTION_LANGUAGES: Array<{ value: string; labelKey: MessageKey }> = [
+    { value: "", labelKey: "settings.transcriptionLanguage.auto" },
+    { value: "ja", labelKey: "settings.transcriptionLanguage.ja" },
+    { value: "en", labelKey: "settings.transcriptionLanguage.en" },
+    { value: "ko", labelKey: "settings.transcriptionLanguage.ko" },
+    { value: "zh", labelKey: "settings.transcriptionLanguage.zh" },
+    { value: "es", labelKey: "settings.transcriptionLanguage.es" },
+    { value: "fr", labelKey: "settings.transcriptionLanguage.fr" },
+    { value: "de", labelKey: "settings.transcriptionLanguage.de" },
 ];
-const CODEX_EFFORTS: Array<{ value: string; label: string }> = [
-    { value: "", label: "(設定ファイル既定)" },
-    { value: "low", label: "low (高速)" },
-    { value: "medium", label: "medium" },
-    { value: "high", label: "high (じっくり)" },
+const NOISE_REDUCTION: Array<{ value: string; labelKey: MessageKey }> = [
+    { value: "near_field", labelKey: "settings.noiseReduction.nearField" },
+    { value: "far_field", labelKey: "settings.noiseReduction.farField" },
+    { value: "off", labelKey: "settings.noiseReduction.off" },
+];
+const CODEX_EFFORTS: Array<{ value: string; labelKey: MessageKey }> = [
+    { value: "", labelKey: "settings.codexEffort.default" },
+    { value: "low", labelKey: "settings.codexEffort.low" },
+    { value: "medium", labelKey: "settings.codexEffort.medium" },
+    { value: "high", labelKey: "settings.codexEffort.high" },
 ];
 
 /**
@@ -47,6 +53,9 @@ const CODEX_EFFORTS: Array<{ value: string; label: string }> = [
  * persist middleware. Changes apply on the next session/start.
  */
 export const SettingsPanel = () => {
+    const t = useT();
+    const uiLocale = useUiStore((s) => s.uiLocale);
+    const setUiLocale = useUiStore((s) => s.setUiLocale);
     const voiceProvider = useSettingsStore((s) => s.voiceProvider);
     const model = useSettingsStore((s) => s.model);
     const voice = useSettingsStore((s) => s.voice);
@@ -63,8 +72,27 @@ export const SettingsPanel = () => {
     return (
         <div className="settings">
             <div className="settings-group">
-                <span className="settings-group-label" title="Speech-to-Speech (STS)">
-                    会話
+                <span className="settings-group-label">{t("settings.label.uiLanguage")}</span>
+                <div className="settings-field">
+                    <label htmlFor="ui-language">{t("settings.label.uiLanguage")}</label>
+                    <select
+                        id="ui-language"
+                        value={uiLocale}
+                        onChange={(e) => setUiLocale(e.target.value as UiLocale)}
+                    >
+                        {UI_LANGUAGES.map((l) => (
+                            <option key={l.value} value={l.value}>
+                                {t(l.labelKey)}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                <p className="settings-note">{t("settings.note.uiLanguage")}</p>
+            </div>
+
+            <div className="settings-group">
+                <span className="settings-group-label" title={t("settings.title.sts")}>
+                    {t("settings.group.conversation")}
                 </span>
                 <div className="settings-field">
                     <label htmlFor="sts-provider">Provider</label>
@@ -119,8 +147,8 @@ export const SettingsPanel = () => {
             </div>
 
             <div className="settings-group">
-                <span className="settings-group-label" title="Speech-to-Text (STT)">
-                    書き起こし
+                <span className="settings-group-label" title={t("settings.title.stt")}>
+                    {t("settings.group.transcription")}
                 </span>
                 <div className="settings-field">
                     <label htmlFor="stt-model">Model</label>
@@ -137,7 +165,7 @@ export const SettingsPanel = () => {
                     </select>
                 </div>
                 <div className="settings-field">
-                    <label htmlFor="stt-language">言語</label>
+                    <label htmlFor="stt-language">{t("settings.label.conversationLanguage")}</label>
                     <select
                         id="stt-language"
                         value={transcriptionLanguage}
@@ -145,14 +173,15 @@ export const SettingsPanel = () => {
                     >
                         {TRANSCRIPTION_LANGUAGES.map((l) => (
                             <option key={l.value} value={l.value}>
-                                {l.label}
+                                {t(l.labelKey)}
                             </option>
                         ))}
                     </select>
                 </div>
+                <p className="settings-note">{t("settings.note.conversationLanguage")}</p>
                 <div className="settings-field">
-                    <label htmlFor="stt-noise" title="OpenAI Realtime のみ。次回接続時に適用">
-                        ノイズ低減
+                    <label htmlFor="stt-noise" title={t("settings.title.noiseReduction")}>
+                        {t("settings.label.noiseReduction")}
                     </label>
                     <select
                         id="stt-noise"
@@ -161,7 +190,7 @@ export const SettingsPanel = () => {
                     >
                         {NOISE_REDUCTION.map((o) => (
                             <option key={o.value} value={o.value}>
-                                {o.label}
+                                {t(o.labelKey)}
                             </option>
                         ))}
                     </select>
@@ -169,11 +198,11 @@ export const SettingsPanel = () => {
             </div>
 
             <div className="settings-group">
-                <span className="settings-group-label" title="Codex sub-agent">
-                    Codex
+                <span className="settings-group-label" title={t("settings.title.codex")}>
+                    {t("settings.group.codex")}
                 </span>
                 <div className="settings-field">
-                    <label htmlFor="codex-effort">Effort</label>
+                    <label htmlFor="codex-effort">{t("settings.label.effort")}</label>
                     <select
                         id="codex-effort"
                         value={codexReasoningEffort}
@@ -181,7 +210,7 @@ export const SettingsPanel = () => {
                     >
                         {CODEX_EFFORTS.map((o) => (
                             <option key={o.value} value={o.value}>
-                                {o.label}
+                                {t(o.labelKey)}
                             </option>
                         ))}
                     </select>
@@ -190,12 +219,12 @@ export const SettingsPanel = () => {
 
             <div className="settings-group settings-group--column">
                 <label htmlFor="instructions" className="settings-group-label">
-                    追加システム指示
+                    {t("settings.label.instructionsExtra")}
                 </label>
                 <textarea
                     id="instructions"
                     rows={3}
-                    placeholder="(任意) このセッション特有の口調や注意点をここに書く"
+                    placeholder={t("settings.placeholder.instructionsExtra")}
                     value={instructionsExtra}
                     onChange={(e) => setSetting("instructionsExtra", e.target.value)}
                 />
@@ -203,7 +232,7 @@ export const SettingsPanel = () => {
 
             <div className="settings-actions">
                 <button type="button" onClick={() => reset()}>
-                    デフォルトに戻す
+                    {t("settings.button.reset")}
                 </button>
             </div>
         </div>

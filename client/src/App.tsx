@@ -6,6 +6,7 @@ import { SettingsPanel } from "./components/SettingsPanel.js";
 import { AudioManager } from "./audio/audio-manager.js";
 import { VoiceWsClient } from "./ws/client.js";
 import { useSessionStore, useSettingsStore } from "./state/store.js";
+import { buildSessionSettingsFromStore } from "./state/session-settings.js";
 
 /**
  * Top-level component. Owns the AudioManager + VoiceWsClient lifecycle and
@@ -40,7 +41,8 @@ export const App = () => {
     const transcriptionModel = useSettingsStore((s) => s.transcriptionModel);
     const transcriptionLanguage = useSettingsStore((s) => s.transcriptionLanguage);
     const codexReasoningEffort = useSettingsStore((s) => s.codexReasoningEffort);
-    const settings = {
+    const noiseReduction = useSettingsStore((s) => s.noiseReduction);
+    const settings = buildSessionSettingsFromStore({
         voiceProvider,
         model,
         voice,
@@ -48,7 +50,8 @@ export const App = () => {
         transcriptionModel,
         transcriptionLanguage,
         codexReasoningEffort,
-    };
+        noiseReduction,
+    });
 
     const connectAndStart = async (): Promise<void> => {
         if (audioRef.current || wsRef.current) return;
@@ -158,6 +161,7 @@ export const App = () => {
         settings.transcriptionModel,
         settings.transcriptionLanguage,
         settings.codexReasoningEffort,
+        settings.noiseReduction,
     ]);
 
     // Cleanup on unmount.

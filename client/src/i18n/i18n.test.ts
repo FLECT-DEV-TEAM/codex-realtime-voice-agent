@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { createTranslator, enMessages, jaMessages, renderLoc } from "./index.js";
+import { useSessionStore } from "../state/store.js";
 
 describe("client i18n dictionaries", () => {
     it("keeps en and ja on the same key set", () => {
@@ -15,6 +16,20 @@ describe("client i18n dictionaries", () => {
         expect(createTranslator("en")("app.error.connectFailed", { message: "boom" })).toBe(
             "Connection failed: boom",
         );
+    });
+
+    it("contains every server LocKey", () => {
+        const source = readFileSync(
+            new URL("../../../server/src/i18n/loc-keys.ts", import.meta.url),
+            "utf8",
+        );
+        const serverKeys = [...source.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+
+        expect(serverKeys.length).toBeGreaterThan(0);
+        for (const key of serverKeys) {
+            expect(enMessages).toHaveProperty(key);
+            expect(jaMessages).toHaveProperty(key);
+        }
     });
 });
 
@@ -44,5 +59,37 @@ describe("renderLoc", () => {
     it("does not use dangerouslySetInnerHTML", () => {
         const source = readFileSync(new URL("./index.tsx", import.meta.url), "utf8");
         expect(source).not.toContain("dangerouslySetInnerHTML");
+    });
+
+    it("keeps status, error, progress, and codex status reactive to locale changes", () => {
+        const store = useSessionStore.getState();
+
+        store.clearLogs();
+        store.setState("connecting", { loc: { key: "app.connecting" } });
+        store.setError({
+            loc: { key: "app.error.connectFailed", params: { message: "boom" } },
+        });
+        store.appendProgress({ loc: { key: "server.progress.codexTransportClosed" } }, "error");
+        store.setCodexStatus({
+            loc: { key: "server.status.reasoning" },
+            turnStartedAt: 1,
+            lastEventAt: 2,
+        });
+
+        const state = useSessionStore.getState();
+        expect(state.statusMessage).not.toBeNull();
+        expect(state.error).not.toBeNull();
+        expect(renderLoc("en", state.statusMessage!)).toBe("Preparing WebSocket / mic...");
+        expect(renderLoc("ja", state.statusMessage!)).toBe("WebSocket / mic を準備中...");
+        expect(renderLoc("en", state.error!)).toBe("Connection failed: boom");
+        expect(renderLoc("ja", state.error!)).toBe("接続に失敗: boom");
+        expect(renderLoc("en", state.progressLog[0].body)).toBe(
+            "[Codex Transport] Process exited unexpectedly",
+        );
+        expect(renderLoc("ja", state.progressLog[0].body)).toBe(
+            "[Codex Transport] プロセスが予期せず終了しました",
+        );
+        expect(renderLoc("en", { loc: state.codexStatus!.loc })).toBe("Reasoning");
+        expect(renderLoc("ja", { loc: state.codexStatus!.loc })).toBe("推論中");
     });
 });

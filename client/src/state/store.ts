@@ -201,6 +201,8 @@ const DEFAULTS: SessionSettings = {
     noiseReduction: "near_field",
 };
 
+export const SETTINGS_STORE_PERSIST_NAME = "codex-realtime-voice-agent.settings";
+
 export const useSettingsStore = create<SettingsStore>()(
     persist(
         (set) => ({
@@ -209,7 +211,7 @@ export const useSettingsStore = create<SettingsStore>()(
             reset: () => set({ ...DEFAULTS }),
         }),
         {
-            name: "codex-realtime-voice-agent.settings",
+            name: SETTINGS_STORE_PERSIST_NAME,
             version: 5,
             // Older clients had a subset of these fields; merge against
             // DEFAULTS so missing keys come back filled in.

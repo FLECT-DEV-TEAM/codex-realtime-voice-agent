@@ -1,6 +1,12 @@
 import { useSettingsStore } from "../state/store.js";
 import { useT, type MessageKey } from "../i18n/index.js";
-import { useUiStore, type UiLocale } from "../state/ui-store.js";
+import {
+    SUPPORTED_TRANSCRIPTION_LANGUAGES,
+    SUPPORTED_UI_LOCALES,
+    type SupportedTranscriptionLanguage,
+    type UiLocale,
+} from "../state/language-detection.js";
+import { useUiStore } from "../state/ui-store.js";
 
 const OPENAI_MODELS = ["gpt-realtime-2", "gpt-realtime-1.5", "gpt-realtime", "gpt-realtime-mini"];
 const GEMINI_MODELS = [
@@ -21,19 +27,28 @@ const OPENAI_VOICES = [
 ];
 const GEMINI_VOICES = ["Kore"];
 const TRANSCRIPTION_MODELS = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1"];
-const UI_LANGUAGES: Array<{ value: UiLocale; labelKey: MessageKey }> = [
-    { value: "en", labelKey: "settings.uiLanguage.en" },
-    { value: "ja", labelKey: "settings.uiLanguage.ja" },
-];
+const UI_LANGUAGE_LABEL_KEYS: Record<UiLocale, MessageKey> = {
+    en: "settings.uiLanguage.en",
+    ja: "settings.uiLanguage.ja",
+};
+const UI_LANGUAGES: Array<{ value: UiLocale; labelKey: MessageKey }> = SUPPORTED_UI_LOCALES.map(
+    (code) => ({ value: code, labelKey: UI_LANGUAGE_LABEL_KEYS[code] }),
+);
+const TRANSCRIPTION_LANGUAGE_LABEL_KEYS: Record<SupportedTranscriptionLanguage, MessageKey> = {
+    ja: "settings.transcriptionLanguage.ja",
+    en: "settings.transcriptionLanguage.en",
+    ko: "settings.transcriptionLanguage.ko",
+    zh: "settings.transcriptionLanguage.zh",
+    es: "settings.transcriptionLanguage.es",
+    fr: "settings.transcriptionLanguage.fr",
+    de: "settings.transcriptionLanguage.de",
+};
 const TRANSCRIPTION_LANGUAGES: Array<{ value: string; labelKey: MessageKey }> = [
     { value: "", labelKey: "settings.transcriptionLanguage.auto" },
-    { value: "ja", labelKey: "settings.transcriptionLanguage.ja" },
-    { value: "en", labelKey: "settings.transcriptionLanguage.en" },
-    { value: "ko", labelKey: "settings.transcriptionLanguage.ko" },
-    { value: "zh", labelKey: "settings.transcriptionLanguage.zh" },
-    { value: "es", labelKey: "settings.transcriptionLanguage.es" },
-    { value: "fr", labelKey: "settings.transcriptionLanguage.fr" },
-    { value: "de", labelKey: "settings.transcriptionLanguage.de" },
+    ...SUPPORTED_TRANSCRIPTION_LANGUAGES.map((code) => ({
+        value: code,
+        labelKey: TRANSCRIPTION_LANGUAGE_LABEL_KEYS[code],
+    })),
 ];
 const NOISE_REDUCTION: Array<{ value: string; labelKey: MessageKey }> = [
     { value: "near_field", labelKey: "settings.noiseReduction.nearField" },

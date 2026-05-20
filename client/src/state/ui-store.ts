@@ -14,6 +14,7 @@ export const UI_STORE_PERSIST_NAME = "codex-realtime-voice-agent.ui";
 interface UiStore {
     uiLocale: UiLocale;
     setUiLocale: (uiLocale: UiLocale) => void;
+    reset: () => void;
 }
 
 export const useUiStore = create<UiStore>()(
@@ -21,6 +22,7 @@ export const useUiStore = create<UiStore>()(
         (set) => ({
             uiLocale: detectInitialUiLocale(readNavigatorLanguages()),
             setUiLocale: (uiLocale) => set({ uiLocale }),
+            reset: () => set({ uiLocale: detectInitialUiLocale(readNavigatorLanguages()) }),
         }),
         {
             name: UI_STORE_PERSIST_NAME,

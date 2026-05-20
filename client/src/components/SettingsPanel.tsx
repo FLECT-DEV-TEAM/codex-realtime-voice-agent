@@ -71,6 +71,7 @@ export const SettingsPanel = () => {
     const t = useT();
     const uiLocale = useUiStore((s) => s.uiLocale);
     const setUiLocale = useUiStore((s) => s.setUiLocale);
+    const resetUi = useUiStore((s) => s.reset);
     const voiceProvider = useSettingsStore((s) => s.voiceProvider);
     const model = useSettingsStore((s) => s.model);
     const voice = useSettingsStore((s) => s.voice);
@@ -246,7 +247,13 @@ export const SettingsPanel = () => {
             </div>
 
             <div className="settings-actions">
-                <button type="button" onClick={() => reset()}>
+                <button
+                    type="button"
+                    onClick={() => {
+                        resetUi();
+                        reset();
+                    }}
+                >
                     {t("settings.button.reset")}
                 </button>
             </div>

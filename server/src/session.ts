@@ -262,6 +262,7 @@ export class Session {
     #state: SessionState = "idle";
     #settings: SessionSettings;
     #activeConversationLanguage: ConversationLanguage = "auto";
+    #activeTranscriptionLanguage: string = "";
 
     get activeConversationLanguage(): ConversationLanguage {
         return this.#activeConversationLanguage;
@@ -401,6 +402,7 @@ export class Session {
         this.#activeConversationLanguage = normalizeConversationLanguage(
             this.#settings.transcriptionLanguage,
         );
+        this.#activeTranscriptionLanguage = this.#settings.transcriptionLanguage;
         this.#stopPromise = null;
         this.#stoppingGracefully = false;
         this.#sessionGeneration += 1;
@@ -691,22 +693,16 @@ export class Session {
                         this.#activeConversationLanguage,
                     );
                     if (verdict === "accept") {
-                        this.#logger.log("voice", "approval-utterance", { text, kind: "accept" });
+                        this.#logApprovalUtterance(text, "accept");
                         coordinator.accept();
                     } else if (verdict === "refuse") {
-                        this.#logger.log("voice", "approval-utterance", { text, kind: "refuse" });
+                        this.#logApprovalUtterance(text, "refuse");
                         coordinator.refuse();
                     } else if (isUserQuestion(text, this.#activeConversationLanguage)) {
-                        this.#logger.log("voice", "approval-utterance", {
-                            text,
-                            kind: "question",
-                        });
+                        this.#logApprovalUtterance(text, "question");
                         coordinator.clarify(text);
                     } else {
-                        this.#logger.log("voice", "approval-utterance", {
-                            text,
-                            kind: "ambiguous",
-                        });
+                        this.#logApprovalUtterance(text, "ambiguous");
                         coordinator.ambiguous();
                     }
                 }
@@ -982,6 +978,19 @@ export class Session {
         } catch {
             return String(value);
         }
+    }
+
+    #logApprovalUtterance(
+        text: string,
+        kind: "accept" | "refuse" | "question" | "ambiguous",
+    ): void {
+        this.#logger.log("voice", "approval-utterance", {
+            text,
+            kind,
+            lang: this.#activeConversationLanguage,
+            transcriptionLanguage: this.#activeTranscriptionLanguage,
+            textLength: text.length,
+        });
     }
 
     #injectCodexProgress(text: string): void {

@@ -18,6 +18,10 @@ import type {
     SessionSettings,
     SessionState,
 } from "../types/messages.js";
+import {
+    detectInitialTranscriptionLanguage,
+    readNavigatorLanguages,
+} from "./language-detection.js";
 
 export interface CodexStatus {
     loc: Loc;
@@ -200,36 +204,38 @@ export interface SettingsStore extends SessionSettings {
     reset: () => void;
 }
 
-const DEFAULTS: SessionSettings = {
-    voiceProvider: "openai",
-    model: "gpt-realtime-2",
-    voice: "marin",
-    instructionsExtra: "",
-    transcriptionModel: "gpt-4o-transcribe",
-    transcriptionLanguage: "ja",
-    // Empty = inherit from ~/.codex/config.toml's model_reasoning_effort.
-    codexReasoningEffort: "",
-    // Default ON (near_field); server env can override the boot default.
-    noiseReduction: "near_field",
-};
+function getDefaultSettings(): SessionSettings {
+    return {
+        voiceProvider: "openai",
+        model: "gpt-realtime-2",
+        voice: "marin",
+        instructionsExtra: "",
+        transcriptionModel: "gpt-4o-transcribe",
+        transcriptionLanguage: detectInitialTranscriptionLanguage(readNavigatorLanguages()),
+        // Empty = inherit from ~/.codex/config.toml's model_reasoning_effort.
+        codexReasoningEffort: "",
+        // Default ON (near_field); server env can override the boot default.
+        noiseReduction: "near_field",
+    };
+}
 
 export const SETTINGS_STORE_PERSIST_NAME = "codex-realtime-voice-agent.settings";
 
 export const useSettingsStore = create<SettingsStore>()(
     persist(
         (set) => ({
-            ...DEFAULTS,
+            ...getDefaultSettings(),
             setSetting: (key, value) => set({ [key]: value } as Partial<SessionSettings>),
-            reset: () => set({ ...DEFAULTS }),
+            reset: () => set({ ...getDefaultSettings() }),
         }),
         {
             name: SETTINGS_STORE_PERSIST_NAME,
             version: 5,
             // Older clients had a subset of these fields; merge against
-            // DEFAULTS so missing keys come back filled in.
+            // current defaults so missing keys come back filled in.
             migrate: (persistedState) => {
                 const s = (persistedState ?? {}) as Partial<SessionSettings>;
-                return { ...DEFAULTS, ...s };
+                return { ...getDefaultSettings(), ...s };
             },
         },
     ),

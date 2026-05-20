@@ -13,6 +13,7 @@
         "dev:server": "pnpm --filter server dev",
         "dev:client": "pnpm --filter client dev",
         "build": "pnpm --filter client build && pnpm --filter server build",
+        "test": "pnpm -r test",
         "typecheck": "pnpm -r typecheck",
         "format": "prettier --write .",
         "format:check": "prettier --check ."

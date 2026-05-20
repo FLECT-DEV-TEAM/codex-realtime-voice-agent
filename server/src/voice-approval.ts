@@ -38,6 +38,7 @@ import {
     ESCALATION_TURN_DETECTION,
 } from "./providers/openai-realtime-provider.js";
 import type { VoiceProvider } from "./providers/voice-provider.js";
+import type { VoiceStrings } from "./i18n/voice-strings.js";
 
 export type VoiceDecision = "accept" | "refuse";
 
@@ -81,10 +82,12 @@ export class VoiceApprovalCoordinator {
     #speakChain: Promise<void> = Promise.resolve();
     readonly #realtime: VoiceProvider;
     readonly #host: VoiceApprovalHost;
+    readonly #strings: VoiceStrings;
 
-    constructor(realtime: VoiceProvider, host: VoiceApprovalHost) {
+    constructor(realtime: VoiceProvider, host: VoiceApprovalHost, strings: VoiceStrings) {
         this.#realtime = realtime;
         this.#host = host;
+        this.#strings = strings;
         // The ONLY responseDone-driven transition: once the (un-interrupted)
         // notice finishes, speak the actual question. Everything else
         // (clarify / reprompt / finalize) interrupts the in-flight response
@@ -155,9 +158,7 @@ export class VoiceApprovalCoordinator {
         this.#realtime.createResponse({
             conversation: "none",
             toolChoice: "none",
-            instructions:
-                `あなたの唯一のタスクは、次の一文だけを自然な日本語で短く話して応答を終了することです。` +
-                `余計な説明・進捗報告・関数呼び出しは一切しないでください。`,
+            instructions: this.#strings.approval.notice.instructions,
             input: [
                 {
                     type: "message",
@@ -165,7 +166,7 @@ export class VoiceApprovalCoordinator {
                     content: [
                         {
                             type: "input_text",
-                            text: "「すみません、いま Codex から確認の依頼が来ました。内容をお伝えします。」とだけ短く言ってください。",
+                            text: this.#strings.approval.notice.spokenInput,
                         },
                     ],
                 },
@@ -177,19 +178,10 @@ export class VoiceApprovalCoordinator {
     #speakQuestion = (): void => {
         if (!this.#pending) return;
         const { summary } = this.#pending;
-        const instructions =
-            `あなたの現在の唯一のタスクは、以下の承認依頼を「何をしようとしているのか」が伝わる自然な日本語で説明し、` +
-            `ユーザーに「はい」か「いいえ」で答えてもらうことです。\n\n` +
-            `読み上げ方の原則:\n` +
-            `- 生コマンド (\`/bin/bash -lc '...'\`, \`npm create vite ...\` など) やフルパスは絶対に音声で読まない。\n` +
-            `- 「Codex が何をしようとしているのか」を 1 文の日本語に要約する。技術用語は最小限に。\n` +
-            `- ファイル名は basename だけ言う (例: \`src/components/Header.tsx\` → 「Header コンポーネント」)。\n` +
-            `- 続けて「実行してもよろしいですか? はい か いいえ で答えてください。」と聞いて応答を終了する。\n\n` +
-            `直前までの会話の流れは無視してください。関数は呼ばないでください。読み上げ終わったら応答を終了してください。`;
         this.#realtime.createResponse({
             conversation: "none",
             toolChoice: "none",
-            instructions,
+            instructions: this.#strings.approval.question.instructions,
             input: [
                 {
                     type: "message",
@@ -197,10 +189,7 @@ export class VoiceApprovalCoordinator {
                     content: [
                         {
                             type: "input_text",
-                            text:
-                                `[システム通知] Codex から承認依頼が届きました。次の内容をユーザーに音声で確認してください。\n\n` +
-                                `承認依頼の生データ: ${summary}\n\n` +
-                                `1 文の日本語で要約し、最後に「実行してもよろしいですか? はい か いいえ で答えてください。」と続けて応答を終えてください。`,
+                            text: this.#strings.approval.question.spokenInput(summary),
                         },
                     ],
                 },
@@ -210,12 +199,12 @@ export class VoiceApprovalCoordinator {
 
     /** The user clearly agreed. */
     accept = (): void => {
-        this.#finalize("accept", "承認しました。");
+        this.#finalize("accept", this.#strings.outcomes.accepted);
     };
 
     /** The user clearly declined. */
     refuse = (): void => {
-        this.#finalize("refuse", "却下しました。");
+        this.#finalize("refuse", this.#strings.outcomes.refused);
     };
 
     /** The user asked a genuine question before deciding. Answer it in one
@@ -224,10 +213,10 @@ export class VoiceApprovalCoordinator {
         if (!this.#pending) return;
         this.#clarifyCount += 1;
         if (this.#clarifyCount > MAX_CLARIFY) {
-            this.#finalize("refuse", "確認できないため却下しました。");
+            this.#finalize("refuse", this.#strings.outcomes.refusedUnconfirmed);
             return;
         }
-        const q = question.trim() || "詳細を教えて";
+        const q = question.trim() || this.#strings.approval.clarify.defaultQuestion;
         const detail = this.#pending.detail ?? this.#pending.summary;
         this.#phase = "clarifying";
         this.#enqueueSpeak(() => this.#doClarify(q, detail));
@@ -239,10 +228,7 @@ export class VoiceApprovalCoordinator {
         this.#realtime.createResponse({
             conversation: "none",
             toolChoice: "none",
-            instructions:
-                `承認依頼の詳細データは次の通りです。ユーザーが「${q}」と質問しています。` +
-                `1 文で短く答えてください。答え終わったら「はい か いいえ で答えてください」と促してください。` +
-                `関数は呼ばないでください。`,
+            instructions: this.#strings.approval.clarify.instructions(q),
             input: [
                 {
                     type: "message",
@@ -250,10 +236,7 @@ export class VoiceApprovalCoordinator {
                     content: [
                         {
                             type: "input_text",
-                            text:
-                                `承認依頼の詳細データ:\n${detail}\n\n` +
-                                `ユーザーの質問:\n${q}\n\n` +
-                                `1 文で短く答えてから、「はい か いいえ で答えてください」と促してください。`,
+                            text: this.#strings.approval.clarify.spokenInput(detail, q),
                         },
                     ],
                 },
@@ -268,7 +251,7 @@ export class VoiceApprovalCoordinator {
         if (!this.#pending) return;
         this.#ambiguousCount += 1;
         if (this.#ambiguousCount > MAX_AMBIGUOUS) {
-            this.#finalize("refuse", "確認できないため却下しました。");
+            this.#finalize("refuse", this.#strings.outcomes.refusedUnconfirmed);
             return;
         }
         this.#phase = "reprompt";
@@ -281,10 +264,7 @@ export class VoiceApprovalCoordinator {
         this.#realtime.createResponse({
             conversation: "none",
             toolChoice: "none",
-            instructions:
-                `これ以上の説明・進捗報告はしないでください。` +
-                `「すみません、はい か いいえ でお願いします。」とだけ短く言って応答を終了してください。` +
-                `関数は呼ばないでください。`,
+            instructions: this.#strings.approval.ambiguous.instructions,
             input: [
                 {
                     type: "message",
@@ -292,7 +272,7 @@ export class VoiceApprovalCoordinator {
                     content: [
                         {
                             type: "input_text",
-                            text: "もう一度、はい か いいえ で短く確認してください。",
+                            text: this.#strings.approval.ambiguous.spokenInput,
                         },
                     ],
                 },
@@ -333,15 +313,16 @@ export class VoiceApprovalCoordinator {
         this.#realtime.createResponse({
             conversation: "none",
             toolChoice: "none",
-            instructions:
-                `次の一文だけを自然な日本語で短く話して応答を終了してください。` +
-                `余計な説明や関数呼び出しはしないでください。`,
+            instructions: this.#strings.approval.outcome.instructions,
             input: [
                 {
                     type: "message",
                     role: "user",
                     content: [
-                        { type: "input_text", text: `「${spoken}」とだけ短く言ってください。` },
+                        {
+                            type: "input_text",
+                            text: this.#strings.approval.outcome.spokenInput(spoken),
+                        },
                     ],
                 },
             ],

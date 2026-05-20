@@ -6,6 +6,8 @@ import { SettingsPanel } from "./components/SettingsPanel.js";
 import { AudioManager } from "./audio/audio-manager.js";
 import { VoiceWsClient } from "./ws/client.js";
 import { useSessionStore, useSettingsStore } from "./state/store.js";
+import { buildSessionSettingsFromStore } from "./state/session-settings.js";
+import { useT } from "./i18n/index.js";
 
 /**
  * Top-level component. Owns the AudioManager + VoiceWsClient lifecycle and
@@ -13,6 +15,7 @@ import { useSessionStore, useSettingsStore } from "./state/store.js";
  * those stores.
  */
 export const App = () => {
+    const t = useT();
     const audioRef = useRef<AudioManager | null>(null);
     const wsRef = useRef<VoiceWsClient | null>(null);
 
@@ -40,7 +43,8 @@ export const App = () => {
     const transcriptionModel = useSettingsStore((s) => s.transcriptionModel);
     const transcriptionLanguage = useSettingsStore((s) => s.transcriptionLanguage);
     const codexReasoningEffort = useSettingsStore((s) => s.codexReasoningEffort);
-    const settings = {
+    const noiseReduction = useSettingsStore((s) => s.noiseReduction);
+    const settings = buildSessionSettingsFromStore({
         voiceProvider,
         model,
         voice,
@@ -48,13 +52,14 @@ export const App = () => {
         transcriptionModel,
         transcriptionLanguage,
         codexReasoningEffort,
-    };
+        noiseReduction,
+    });
 
     const connectAndStart = async (): Promise<void> => {
         if (audioRef.current || wsRef.current) return;
         clearLogs();
         setError(null);
-        setState("connecting", "WebSocket / mic を準備中...");
+        setState("connecting", { loc: { key: "app.connecting" } });
 
         try {
             // 1. Open audio first (mic permission prompt may appear).
@@ -80,7 +85,7 @@ export const App = () => {
                             appendTranscript(msg.role, msg.text);
                             return;
                         case "codex/progress":
-                            appendProgress(msg.text, msg.level, msg.streaming);
+                            appendProgress(msg.body, msg.level, msg.streaming);
                             return;
                         case "codex/turn":
                             setCodexTurnId(msg.turnId);
@@ -111,23 +116,29 @@ export const App = () => {
                             );
                             return;
                         case "error":
-                            setError(msg.message);
+                            setError(msg.body);
                             if (msg.fatal) void stop();
                             return;
                     }
                 },
                 onAudio: (pcm) => audio.enqueuePlayback(pcm),
                 onClose: () => {
-                    setState("stopped", "サーバとの接続が閉じました");
+                    setState("stopped", { loc: { key: "app.connectionClosed" } });
                     void stop();
                 },
-                onError: () => setError("WebSocket error"),
+                onError: () => setError({ loc: { key: "app.error.websocket" } }),
             });
             ws.connect(wsUrl);
             wsRef.current = ws;
         } catch (err) {
-            setError(`接続に失敗: ${(err as Error).message}`);
-            setState("error", (err as Error).message);
+            const body = {
+                loc: {
+                    key: "app.error.connectFailed",
+                    params: { message: (err as Error).message },
+                },
+            } as const;
+            setError(body);
+            setState("error", body);
             await stop();
         }
     };
@@ -158,6 +169,7 @@ export const App = () => {
         settings.transcriptionModel,
         settings.transcriptionLanguage,
         settings.codexReasoningEffort,
+        settings.noiseReduction,
     ]);
 
     // Cleanup on unmount.
@@ -177,12 +189,12 @@ export const App = () => {
             <div className="app-body">
                 <div className="panel-row panel-row--main">
                     <section className="panel panel--transcript">
-                        <h2>Transcript</h2>
+                        <h2>{t("app.panel.transcript")}</h2>
                         <TranscriptPanel />
                     </section>
                     <section className="panel panel--progress">
                         <h2>
-                            Codex 進捗
+                            {t("app.panel.progress")}
                             {codexThreadId && (
                                 <small className="panel-meta" title={codexThreadId}>
                                     {" "}
@@ -201,7 +213,7 @@ export const App = () => {
                 </div>
                 <div className="panel-row">
                     <section className="panel panel--settings">
-                        <h2>Settings</h2>
+                        <h2>{t("app.panel.settings")}</h2>
                         <SettingsPanel />
                     </section>
                 </div>

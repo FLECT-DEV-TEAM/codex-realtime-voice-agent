@@ -1,18 +1,19 @@
 import { useSessionStore } from "../state/store.js";
+import { renderLoc, useT, useUiLocale, type MessageKey } from "../i18n/index.js";
 
 interface Props {
     onStart: () => void;
     onStop: () => void;
 }
 
-const STATE_LABEL: Record<string, string> = {
-    idle: "停止中",
-    connecting: "接続中…",
-    ready: "準備完了",
-    active: "通話中",
-    stopping: "終了処理中…",
-    stopped: "停止しました",
-    error: "エラー",
+const STATE_LABEL_KEY: Record<string, MessageKey> = {
+    idle: "connection.state.idle",
+    connecting: "connection.state.connecting",
+    ready: "connection.state.ready",
+    active: "connection.state.active",
+    stopping: "connection.state.stopping",
+    stopped: "connection.state.stopped",
+    error: "connection.state.error",
 };
 
 const STATE_CLASS: Record<string, string> = {
@@ -26,6 +27,8 @@ const STATE_CLASS: Record<string, string> = {
 };
 
 export const ConnectionControls = ({ onStart, onStop }: Props) => {
+    const t = useT();
+    const uiLocale = useUiLocale();
     const state = useSessionStore((s) => s.state);
     const statusMessage = useSessionStore((s) => s.statusMessage);
     const error = useSessionStore((s) => s.error);
@@ -42,16 +45,20 @@ export const ConnectionControls = ({ onStart, onStop }: Props) => {
                 onClick={isLive ? onStop : onStart}
                 disabled={state === "stopping"}
             >
-                {isLive ? "停止" : "接続して会話開始"}
+                {isLive ? t("connection.button.stop") : t("connection.button.start")}
             </button>
             <div className={`conn-status ${STATE_CLASS[state] ?? ""}`}>
-                <strong>{STATE_LABEL[state] ?? state}</strong>
-                {statusMessage && <span className="conn-msg"> — {statusMessage}</span>}
-                {error && <span className="conn-msg conn-msg--err"> ⚠ {error}</span>}
+                <strong>{STATE_LABEL_KEY[state] ? t(STATE_LABEL_KEY[state]) : state}</strong>
+                {statusMessage && (
+                    <span className="conn-msg"> — {renderLoc(uiLocale, statusMessage)}</span>
+                )}
+                {error && (
+                    <span className="conn-msg conn-msg--err"> ⚠ {renderLoc(uiLocale, error)}</span>
+                )}
                 {sessionId && (
                     <span className="conn-thread" title={logFile ?? undefined}>
                         {" "}
-                        session: {sessionId}
+                        {t("connection.session")} {sessionId}
                     </span>
                 )}
             </div>

@@ -67,6 +67,23 @@ pnpm dev
 - **Codex 進捗** — `[Codex 進捗]` 系のライブログ (turn 開始/完了, item イベント, exec 出力など)。
 - **Settings** — モデル / 声 / 追加システム指示を変更できます。`localStorage` に永続化、セッション中の変更はサーバへ `settings/update` で即時反映。
 
+## 国際化
+
+このアプリには独立した 2 つの言語設定があります。
+
+- **UI 言語** はブラウザ画面だけを切り替えます。Settings の **UI 言語** セレクトで `en` / `ja` を選べます。クライアント内で完結し、独立して `localStorage` に永続化され、サーバへは送られません。初期値は `navigator.language` から推定します。切り替えは reload 不要で、表示中の status / error / progress も含めて即時に再翻訳されます。
+- **会話言語** は Settings の **会話言語** / transcription language セレクトです。サーバ側のプロンプト、Yes/No 承認判定、質問判定、承認読み上げ、Codex summary/detail の言語を決めます。
+
+完全対応は現在 `en` / `ja` のみです。UI 言語では全 UI、会話言語ではプロンプト、Yes/No 判定、質問判定、summary、detail が対応しています。
+
+`ko` / `zh` / `es` / `fr` / `de` と自動判定 (空値) は、会話言語としては yes/no 承認判定のみ簡易対応です。プロンプト、質問判定、承認読み上げは `auto` 経路の言語非依存扱いになります。安全側に倒すため accept 判定は保守的で、不明瞭な承認返答は承認扱いにせず確認へ戻します。
+
+会話言語は接続時にスナップショットされます。稼働中セッションで `settings/update` により変更しても現在の会話には反映されません。反映するには再接続してください。
+
+Gemini Live には、このアプリから STT 言語指定をまだ渡していません。承認読み上げは Realtime instructions ではなく `createResponse` の input text、つまり実際に発話させる文で担保するため、OpenAI Realtime とは効き方が異なります。
+
+`instructionsExtra` は system instructions の後ろに付く上級者向け override です。通常会話本文の言語は `instructionsExtra` で上書きされ得ますが、承認読み上げ、Yes/No 判定、summary/detail は会話言語に固定されます。これらの発話文は `instructionsExtra` の影響を受けない形で生成されます。
+
 ## 音声承認フロー
 
 削除、ネットワークアクセス、`sudo` などの危険操作はサーバ側の決定的フィルタが拾います。フィルタが `escalate` を返した場合のみ、エージェントは音声でユーザに確認します。返答取得時は `tool_choice: "required"` + 1 ツールだけ提示する戦略で `voice_approval_response` ファンクションを強制発火させ、ユーザの口頭判断を受け取ります。承認モーダルは現時点では実装していませんが、将来追加できるようプロトコル側は分離してあります。

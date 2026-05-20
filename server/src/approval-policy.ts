@@ -21,6 +21,7 @@
  * --------------------------------------------------------------------------
  */
 import type { ApprovalKind } from "codex-app-server-bridge";
+import type { VoiceStrings } from "./i18n/voice-strings.js";
 
 export type PolicyVerdict = "auto-accept" | "escalate" | "auto-refuse";
 
@@ -73,13 +74,14 @@ const PROHIBITED_TOKENS = [
 
 export const classifyApproval = (
     input: PolicyInput,
+    strings: VoiceStrings,
 ): {
     verdict: PolicyVerdict;
     reason: string;
     /** Short summary of the requested action for TTS readout. */
     summary: string;
 } => {
-    const summary = summarize(input);
+    const summary = summarize(input, strings);
     const haystack = JSON.stringify(input.params ?? {}).toLowerCase();
 
     for (const token of PROHIBITED_TOKENS) {
@@ -127,24 +129,29 @@ export const classifyApproval = (
     return { verdict: "escalate", reason: "unknown kind", summary };
 };
 
-const summarize = (input: PolicyInput): string => {
+const summarize = (input: PolicyInput, strings: VoiceStrings): string => {
     const p = input.params as { command?: unknown; humanReadable?: unknown; reason?: unknown };
-    if (typeof p?.humanReadable === "string") return p.humanReadable.slice(0, 200);
+    if (typeof p?.humanReadable === "string") {
+        return strings.summarize.fallback(p.humanReadable).slice(0, 200);
+    }
     if (input.kind === "commandExecution") {
         const cmd = p?.command;
-        if (typeof cmd === "string") return `コマンドを実行: ${cmd}`.slice(0, 200);
-        if (Array.isArray(cmd)) return `コマンドを実行: ${cmd.join(" ")}`.slice(0, 200);
+        if (typeof cmd === "string") return strings.summarize.commandExec(cmd).slice(0, 200);
+        if (Array.isArray(cmd)) {
+            return strings.summarize.commandExec(cmd.join(" ")).slice(0, 200);
+        }
     }
     if (input.kind === "fileChange") {
         const paths = input.resolvedPaths ?? [];
         if (paths.length > 0) {
-            const verb = input.hasDelete ? "削除" : "変更";
-            return `ファイル${verb}: ${paths.join(", ")}`.slice(0, 200);
+            return strings.summarize
+                .fileChange(input.hasDelete ? "delete" : "modify", paths)
+                .slice(0, 200);
         }
         const reason = typeof p?.reason === "string" ? `(${p.reason})` : "";
-        return `Codex がファイル変更の承認を求めています${reason}`;
+        return strings.summarize.fallback(reason).slice(0, 200);
     }
-    return `${input.kind} 承認リクエスト`;
+    return strings.summarize.unknownKind(input.kind).slice(0, 200);
 };
 
 const pathInWorkspace = (p: string, cwd: string): boolean => {

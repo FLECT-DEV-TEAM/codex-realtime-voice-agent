@@ -67,6 +67,23 @@ Then open <http://localhost:5273>, click **接続して会話開始**, allow mic
 - **Codex 進捗** — live `[Codex 進捗]` progress log (turn start/end, item events, exec output).
 - **Settings** — choose model & voice, append extra system instructions. Persisted to `localStorage`; while a session is live, edits are pushed to the server with `settings/update`.
 
+## Internationalization
+
+The app has two independent language settings:
+
+- **UI language** controls the browser UI only. It is the **UI language** selector in Settings, supports `en` and `ja`, stays entirely on the client, is persisted separately in `localStorage`, and is never sent to the server. The initial value is inferred from `navigator.language`. Switching it immediately re-translates visible UI, including currently displayed status, error, and progress messages, without reloading.
+- **Conversation language** is the Settings **Conversation language** / transcription language selector. It drives server-side prompts, yes/no approval detection, question detection, approval speech, and Codex summary/detail text.
+
+Full support is currently limited to `en` and `ja`: all UI text for UI language, and prompts, yes/no detection, question detection, summary, and detail text for conversation language.
+
+For `ko`, `zh`, `es`, `fr`, `de`, and auto-detect (empty value), conversation language uses lightweight yes/no approval detection only. These modes go through the `auto` path for prompts, question detection, and approval speech. Accept matching is intentionally conservative for safety, so unclear approval replies fall back to clarification instead of being treated as approval.
+
+Conversation language is snapshotted when the session connects. Changing it with `settings/update` during a live session does not affect the current conversation; reconnect to apply it.
+
+Gemini Live does not currently receive an STT language setting from this app. Approval speech is still controlled through the `createResponse` input text, not Realtime instructions, so it applies differently from OpenAI Realtime.
+
+`instructionsExtra` is an advanced override appended after the system instructions. It can influence the language of ordinary conversation replies, but approval speech, yes/no detection, and summary/detail text remain tied to the conversation language because those utterance texts are generated outside `instructionsExtra`.
+
 ## Voice approval flow
 
 Risky operations (deletes, network calls, `sudo`, …) trigger a deterministic policy filter on the server. When the filter returns `escalate`, the agent is forced to ask the user out loud, then forced (via `tool_choice: "required"` + a single tool) to emit a `voice_approval_response` function call carrying the user's spoken decision. No modal — by design, for now. The protocol is structured so a modal can be added later without changing the wire format.

@@ -27,9 +27,18 @@ import {
 import { classifyApproval } from "./approval-policy.js";
 import { VoiceApprovalCoordinator } from "./voice-approval.js";
 import { SessionLogger } from "./session-logger.js";
+import {
+    normalizeConversationLanguage,
+    type ConversationLanguage,
+} from "./i18n/conversation-language.js";
+import { classifyApprovalUtterance, isUserQuestion } from "./i18n/decision.js";
+import { getModelStrings } from "./i18n/model-strings.js";
+import { buildSystemInstructions, getVoiceStrings } from "./i18n/voice-strings.js";
 import type {
     ClientToServerMessage,
     CodexTokenUsage,
+    Loc,
+    LocOrText,
     RealtimeUsage,
     ServerToClientMessage,
     SessionSettings,
@@ -60,67 +69,6 @@ function codexTransportCommand(): { command: string; args: string[] } {
         ],
     };
 }
-
-// Deterministic yes/no classification of the user's spoken answer to an
-// approval question. This is the primary resolution path: the Realtime
-// model has been observed to call `voice_approval_response` with
-// `decision:"ask"` plus a hallucinated progress narration even for a bare
-// "はい", which loops forever. Reading the decision straight off the
-// completed transcript bypasses that failure mode entirely.
-const APPROVAL_REFUSE_RE =
-    /(いいえ|いえ|いや|ううん|だめ|ダメ|駄目|やめ|止め|やらないで|しないで|キャンセル|きゃんせる|ちがう|違う|結構です|けっこうです|no|nope|cancel|stop|dont)/i;
-// `いいです` is intentionally NOT here: in answer to "実行してよいですか?"
-// it usually means the dismissive "結構です / no thanks", so it must not
-// classify as accept.
-const APPROVAL_ACCEPT_RE =
-    /(はい|ハイ|うん|ええ|おっけ|オッケ|オーケー|おーけー|了解|りょうかい|いいよ|お願い|おねがい|よろしく|大丈夫|だいじょうぶ|進めて|すすめて|実行して|続けて|どうぞ|okay|ok|yes|yeah|yep|sure|goahead)/i;
-
-function classifyApprovalUtterance(text: string): "accept" | "refuse" | null {
-    // A clarifying *question* from the user (e.g. "これは大丈夫な変更ですか?")
-    // can embed an accept keyword. The gate is `isEscalating` (broad, so a
-    // barge-in answer during the spoken question is not lost), so a
-    // question must never be read as a decision.
-    // Any interrogative is treated as NOT a decision: a clarifying
-    // question like "これ大丈夫ですかね?" embeds an accept keyword, and a
-    // reask such as "はい？" is intentionally left to the model path
-    // (conservative on purpose). Sentence-final か / かな / かね / かしら /
-    // でしょうか all mark a question.
-    const raw = text.trim();
-    if (/[?？]/.test(raw) || /(でしょうか|かしら|かね|かな|か)[。.\s]*$/.test(raw)) return null;
-    const t = text.replace(/[\s。、．，！？!?.'"`]/g, "").toLowerCase();
-    // Long utterances are unlikely to be a clean yes/no answer; fall back
-    // to the model path (which now also has the strict no-`ask` tool).
-    if (!t || t.length > 20) return null;
-    if (APPROVAL_REFUSE_RE.test(t)) return "refuse";
-    if (APPROVAL_ACCEPT_RE.test(t)) return "accept";
-    return null;
-}
-
-// Does the user's utterance look like a genuine question / request for
-// more info (as opposed to the model hallucinating `ask`)? Used to decide
-// whether a clarification round counts against the budget: a user asking
-// several real questions in a row must always be answered. Deliberately
-// broad — a false positive only grants an extra clarification (safe,
-// since accepting still requires a deterministic spoken yes).
-function isUserQuestion(text: string): boolean {
-    const raw = text.trim();
-    if (/[?？]/.test(raw)) return true;
-    if (/(でしょうか|かしら|かね|かな|か)[。.\s]*$/.test(raw)) return true;
-    return /(どれ|どの|どこ|なぜ|なに|何|いつ|だれ|誰|教えて|おしえて|詳しく|くわしく|具体的|フルパス|意味|理由|どういう|どうやって)/.test(
-        raw,
-    );
-}
-
-const SYSTEM_INSTRUCTIONS = `あなたは音声で操作できるコーディングアシスタントです。ユーザーから自然な日本語で依頼を受けたら、必要に応じて codex_turn 関数を呼び出して、Codex (別のサンドボックス化されたコーディングエージェント) に実装作業を委譲してください。
-
-## ルール
-- ファイル操作、コード編集、コマンド実行、リポジトリ調査などコードに触れる作業は必ず codex_turn 経由で行うこと。
-- codex_turn の結果テキストをそのままユーザーに音声で返さない。要点だけを短く伝える (10 秒以内に話せる分量)。
-- 自分自身はファイルを読んだり書いたりできない。Codex に任せること。
-- 雑談には簡潔に応じる。
-
-## Codex 進捗メッセージ ([Codex 進捗] で始まるもの)
-会話中に \`[Codex 進捗] ...\` で始まるメッセージが流れてくることがあります。これは Codex の作業状況を共有する内部通知です。応答音声を生成する必要はありません。ユーザーが「進捗は?」と聞いたときの理解に活用してください。`;
 
 const codexTurnTool: RealtimeTool = {
     type: "function",
@@ -268,6 +216,34 @@ type NotificationSource = {
     ) => NotificationSubscription;
 };
 
+type CodexBridgeLike = {
+    client: NotificationSource;
+    connect: () => Promise<void>;
+    startThread: (args: never) => Promise<{ thread: { id: string } }>;
+    startTurn: (args: never) => AsyncIterable<{
+        type: string;
+        [key: string]: unknown;
+    }>;
+    interruptTurn?: (args: { threadId: string; turnId: string }) => Promise<unknown>;
+    close: () => Promise<void>;
+    onNotification?: NotificationSource["onNotification"];
+};
+
+type RealtimeProviderFactoryArgs = {
+    voiceProvider: "openai" | "gemini";
+    apiKey: string;
+    geminiApiKey?: string;
+    model: string;
+    voice: string;
+    instructions: string;
+    tools: RealtimeTool[];
+    toolChoice: ToolChoice;
+    transcriptionModel: string;
+    transcriptionLanguage: string;
+    noiseReduction: string;
+    logger: SessionLogger;
+};
+
 export interface SessionDeps {
     apiKey: string;
     geminiApiKey?: string;
@@ -276,6 +252,8 @@ export interface SessionDeps {
     defaultGeminiModel: string;
     codexCwd: string;
     logsDir: string;
+    createBridge?: (config: ConstructorParameters<typeof CodexBridge>[0]) => CodexBridgeLike;
+    createRealtimeProvider?: (args: RealtimeProviderFactoryArgs) => VoiceProvider;
 }
 
 export class Session {
@@ -283,7 +261,13 @@ export class Session {
     readonly #ws: WS;
     #state: SessionState = "idle";
     #settings: SessionSettings;
-    #bridge: CodexBridge | null = null;
+    #activeConversationLanguage: ConversationLanguage = "auto";
+
+    get activeConversationLanguage(): ConversationLanguage {
+        return this.#activeConversationLanguage;
+    }
+
+    #bridge: CodexBridgeLike | null = null;
     #tokenUsageSub: NotificationSubscription | null = null;
     #transportSubs: NotificationSubscription[] = [];
     #stoppingGracefully = false;
@@ -362,7 +346,12 @@ export class Session {
         console.error(`[session] id=${this.#logger.id} log=${this.#logger.file}`);
         ws.on("message", (data, isBinary) => this.#onWsMessage(data, isBinary));
         ws.on("close", () => this.#onWsClose());
-        ws.on("error", (err) => this.#emitError(`websocket error: ${err.message}`, false));
+        ws.on("error", (err) =>
+            this.#emitError(
+                { loc: { key: "server.error.websocket", params: { message: err.message } } },
+                false,
+            ),
+        );
         this.#emitSettings();
         this.#setState("idle");
     }
@@ -382,7 +371,7 @@ export class Session {
         try {
             parsed = JSON.parse(text) as ClientToServerMessage;
         } catch {
-            this.#emitError("invalid JSON from client", false);
+            this.#emitError({ loc: { key: "server.error.invalidJson" } }, false);
             return;
         }
         this.#logger.log("ws.in", parsed.type, parsed);
@@ -409,6 +398,9 @@ export class Session {
         if (this.#state !== "idle" && this.#state !== "stopped" && this.#state !== "error") {
             return;
         }
+        this.#activeConversationLanguage = normalizeConversationLanguage(
+            this.#settings.transcriptionLanguage,
+        );
         this.#stopPromise = null;
         this.#stoppingGracefully = false;
         this.#sessionGeneration += 1;
@@ -432,7 +424,7 @@ export class Session {
                 ...codexTransportCommand(),
                 cwd: this.#deps.codexCwd,
             });
-            this.#bridge = new CodexBridge({
+            const bridgeConfig: ConstructorParameters<typeof CodexBridge>[0] = {
                 transport,
                 clientInfo: {
                     name: "codex_realtime_voice_agent",
@@ -459,14 +451,18 @@ export class Session {
                             }
                         }
                     }
-                    const policy = classifyApproval({
-                        kind: kind as ApprovalKind,
-                        method,
-                        params,
-                        cwd: this.#deps.codexCwd,
-                        resolvedPaths,
-                        hasDelete,
-                    });
+                    const strings = getVoiceStrings(this.#activeConversationLanguage);
+                    const policy = classifyApproval(
+                        {
+                            kind: kind as ApprovalKind,
+                            method,
+                            params,
+                            cwd: this.#deps.codexCwd,
+                            resolvedPaths,
+                            hasDelete,
+                        },
+                        strings,
+                    );
                     this.#logger.log("policy", "verdict", {
                         verdict: policy.verdict,
                         summary: policy.summary,
@@ -474,7 +470,7 @@ export class Session {
                         resolvedPaths,
                         hasDelete,
                     });
-                    this.#progress(`policy: ${policy.verdict} — ${policy.summary}`);
+                    this.#progress({ text: `policy: ${policy.verdict} — ${policy.summary}` });
                     if (policy.verdict === "auto-accept") return { decision: "accept" };
                     if (policy.verdict === "auto-refuse") return { decision: "refuse" };
                     if (!this.#voiceCoordinator) return { decision: "refuse" };
@@ -568,7 +564,10 @@ export class Session {
                         }
                     });
                 },
-            });
+            };
+            this.#bridge = this.#deps.createBridge
+                ? this.#deps.createBridge(bridgeConfig)
+                : new CodexBridge(bridgeConfig);
             const errSub = transport.onError((err) => this.#onCodexTransportError(err));
             const closeSub = transport.onClose(() => this.#onCodexTransportClose());
             this.#transportSubs.push(errSub, closeSub);
@@ -593,7 +592,12 @@ export class Session {
             } as never)) as { thread: { id: string } };
             this.#threadId = startResult.thread.id;
             this.#emitSettings();
-            this.#progress(`Codex thread ${this.#threadId} started`);
+            this.#progress({
+                loc: {
+                    key: "server.progress.codexThreadStarted",
+                    params: { threadId: this.#threadId },
+                },
+            });
 
             // ----- Voice provider -----
             const voiceProvider = this.#settings.voiceProvider ?? "openai";
@@ -609,10 +613,25 @@ export class Session {
                         : defaultGeminiVoiceFor()
                     : configuredVoice || defaultVoiceFor(model);
             const instructions =
-                SYSTEM_INSTRUCTIONS +
+                buildSystemInstructions(this.#activeConversationLanguage) +
                 (this.#settings.instructionsExtra ? "\n\n" + this.#settings.instructionsExtra : "");
             const tools = [codexTurnTool];
-            if (voiceProvider === "gemini") {
+            if (this.#deps.createRealtimeProvider) {
+                this.#realtime = this.#deps.createRealtimeProvider({
+                    voiceProvider,
+                    apiKey: this.#deps.apiKey,
+                    geminiApiKey: this.#deps.geminiApiKey,
+                    model,
+                    voice,
+                    instructions,
+                    tools,
+                    toolChoice: "auto",
+                    transcriptionModel: this.#settings.transcriptionModel,
+                    transcriptionLanguage: this.#settings.transcriptionLanguage,
+                    noiseReduction: this.#settings.noiseReduction,
+                    logger: this.#logger,
+                });
+            } else if (voiceProvider === "gemini") {
                 if (!this.#deps.geminiApiKey) {
                     throw new Error("GEMINI_API_KEY is required when voiceProvider=gemini");
                 }
@@ -643,9 +662,13 @@ export class Session {
                     this.#logger,
                 );
             }
-            this.#voiceCoordinator = new VoiceApprovalCoordinator(this.#realtime, {
-                onInterrupt: () => this.#interruptPlayback(),
-            });
+            this.#voiceCoordinator = new VoiceApprovalCoordinator(
+                this.#realtime,
+                {
+                    onInterrupt: () => this.#interruptPlayback(),
+                },
+                getVoiceStrings(this.#activeConversationLanguage),
+            );
 
             this.#realtime.on("audio", (chunk) => {
                 if (this.#suppressAudio) return;
@@ -663,14 +686,17 @@ export class Session {
                 // finished utterance (input_audio_transcription.completed).
                 const coordinator = this.#voiceCoordinator;
                 if (role === "user" && coordinator?.isEscalating) {
-                    const verdict = classifyApprovalUtterance(text);
+                    const verdict = classifyApprovalUtterance(
+                        text,
+                        this.#activeConversationLanguage,
+                    );
                     if (verdict === "accept") {
                         this.#logger.log("voice", "approval-utterance", { text, kind: "accept" });
                         coordinator.accept();
                     } else if (verdict === "refuse") {
                         this.#logger.log("voice", "approval-utterance", { text, kind: "refuse" });
                         coordinator.refuse();
-                    } else if (isUserQuestion(text)) {
+                    } else if (isUserQuestion(text, this.#activeConversationLanguage)) {
                         this.#logger.log("voice", "approval-utterance", {
                             text,
                             kind: "question",
@@ -707,7 +733,7 @@ export class Session {
                 // It's harmless and noisy — drop it from the progress log.
                 // The raw event is still in the JSONL log for inspection.
                 if (err.message.includes("response_cancel_not_active")) return;
-                this.#progress(`realtime error: ${err.message}`, "error");
+                this.#progress({ text: `realtime error: ${err.message}` }, "error");
             });
             this.#realtime.on("raw", (event) => {
                 const t = event.type as string | undefined;
@@ -771,13 +797,21 @@ export class Session {
             });
 
             await this.#realtime.connect();
-            this.#progress(
-                `Realtime session open (provider=${voiceProvider}, model=${model}, voice=${voice}, inputRate=${this.#realtime.inputSampleRate}, preamble=${voiceProvider === "openai" && supportsPreamble(model) ? "on" : "off"})`,
-            );
+            this.#progress({
+                text: `Realtime session open (provider=${voiceProvider}, model=${model}, voice=${voice}, inputRate=${this.#realtime.inputSampleRate}, preamble=${voiceProvider === "openai" && supportsPreamble(model) ? "on" : "off"})`,
+            });
 
             this.#setState("active");
         } catch (err) {
-            this.#emitError(`session start failed: ${(err as Error).message}`, true);
+            this.#emitError(
+                {
+                    loc: {
+                        key: "server.error.sessionStartFailed",
+                        params: { message: (err as Error).message },
+                    },
+                },
+                true,
+            );
             await this.stop();
         }
     };
@@ -832,7 +866,15 @@ export class Session {
 
     #onCodexTransportError(err: Error): void {
         this.#logger.log("transport", "error", { message: err.message, stack: err.stack });
-        this.#progress(`[Codex Transport] エラー: ${err.message}`, "error");
+        this.#progress(
+            {
+                loc: {
+                    key: "server.progress.codexTransportError",
+                    params: { message: err.message },
+                },
+            },
+            "error",
+        );
         this.#onCodexTransportClose();
     }
 
@@ -846,9 +888,9 @@ export class Session {
             return;
         }
         this.#logger.log("transport", "unexpected-close");
-        this.#progress("[Codex Transport] プロセスが予期せず終了しました", "error");
+        this.#progress({ loc: { key: "server.progress.codexTransportClosed" } }, "error");
         this.#transportDeadReported = true;
-        this.#emitError("Codex bridge transport closed unexpectedly", true);
+        this.#emitError({ loc: { key: "server.error.codexTransportClosed" } }, true);
         void this.stop();
     }
 
@@ -862,7 +904,11 @@ export class Session {
             if (this.#turnInFlight) {
                 this.#realtime.sendFunctionCallOutput(
                     call.callId,
-                    JSON.stringify({ status: "error", message: "前のターンがまだ実行中です" }),
+                    JSON.stringify({
+                        status: "error",
+                        message: getModelStrings(this.#activeConversationLanguage)
+                            .turnAlreadyRunning,
+                    }),
                 );
                 this.#realtime.createResponse();
                 return;
@@ -876,7 +922,12 @@ export class Session {
             } catch (err) {
                 this.#realtime.sendFunctionCallOutput(
                     call.callId,
-                    JSON.stringify({ status: "error", message: String(err) }),
+                    JSON.stringify({
+                        status: "error",
+                        message: getModelStrings(this.#activeConversationLanguage).rawError(
+                            String(err),
+                        ),
+                    }),
                 );
             } finally {
                 this.#turnInFlight = false;
@@ -900,11 +951,12 @@ export class Session {
     };
 
     #buildApprovalDetail = (kind: string, params: unknown, resolvedPaths?: string[]): string => {
-        const lines = [`種別: ${kind}`];
+        const labels = getVoiceStrings(this.#activeConversationLanguage).approvalDetail;
+        const lines = [`${labels.kind}: ${kind}`];
         const p = params as Record<string, unknown>;
         if (kind === "fileChange" && resolvedPaths && resolvedPaths.length > 0) {
             lines.push(
-                "ファイル変更対象:",
+                `${labels.fileTargets}:`,
                 ...resolvedPaths.map((filePath) =>
                     path.isAbsolute(filePath)
                         ? filePath
@@ -914,9 +966,9 @@ export class Session {
             return lines.join("\n");
         }
         if (kind === "commandExecution") {
-            if (typeof p.command === "string") lines.push(`コマンド: ${p.command}`);
-            if (Array.isArray(p.command)) lines.push(`コマンド: ${p.command.join(" ")}`);
-            if (typeof p.cwd === "string") lines.push(`作業ディレクトリ: ${p.cwd}`);
+            if (typeof p.command === "string") lines.push(`${labels.command}: ${p.command}`);
+            if (Array.isArray(p.command)) lines.push(`${labels.command}: ${p.command.join(" ")}`);
+            if (typeof p.cwd === "string") lines.push(`${labels.cwd}: ${p.cwd}`);
             if (lines.length > 1) return lines.join("\n");
         }
         const raw = this.#safeStringify(params);
@@ -943,7 +995,7 @@ export class Session {
                 content: [
                     {
                         type: "input_text",
-                        text: `[Codex 進捗] ${trimmed.slice(0, 200)}`,
+                        text: `${getVoiceStrings(this.#activeConversationLanguage).codexProgressPrefix} ${trimmed.slice(0, 200)}`,
                     },
                 ],
             },
@@ -953,7 +1005,10 @@ export class Session {
     #runCodexTurn = async (
         message: string,
     ): Promise<{ status: "completed" | "error"; text: string; message?: string }> => {
-        if (!this.#bridge) return { status: "error", text: "", message: "bridge not connected" };
+        const modelStrings = getModelStrings(this.#activeConversationLanguage);
+        if (!this.#bridge) {
+            return { status: "error", text: "", message: modelStrings.bridgeNotConnected };
+        }
         const accum: string[] = [];
         let pendingNarrative = "";
         const flushNarrativeIfReady = (force: boolean): void => {
@@ -990,15 +1045,15 @@ export class Session {
         let lastEventAt: number | null = null;
         let lastThrottledStatusAt = 0;
         const idleMs = this.#turnIdleTimeoutMs;
-        const sendCodexStatus = (text: string, throttle = false): void => {
+        const sendCodexStatus = (loc: Loc, throttle = false): void => {
             const now = Date.now();
             if (throttle) {
                 if (now - lastThrottledStatusAt < 500) return;
                 lastThrottledStatusAt = now;
             }
-            this.#send({ type: "codex/status", text, turnStartedAt, lastEventAt });
+            this.#send({ type: "codex/status", loc, turnStartedAt, lastEventAt });
         };
-        const summarizeItemStarted = (item: unknown): string => {
+        const summarizeItemStarted = (item: unknown): Loc => {
             const wrap = item as {
                 item?: {
                     type?: string;
@@ -1010,18 +1065,23 @@ export class Session {
                 };
             };
             const inner = wrap?.item;
-            if (!inner) return "項目開始: ?";
+            if (!inner) return { key: "server.status.itemStarted", params: { type: "?" } };
             const itemType = inner?.type ?? "?";
             if (itemType === "commandExecution") {
                 const command = typeof inner.command === "string" ? inner.command : "?";
-                return `コマンド実行中: ${command.slice(0, 60)}`;
+                return {
+                    key: "server.status.commandRunning",
+                    params: { command: command.slice(0, 60) },
+                };
             }
             if (itemType === "fileChange") {
                 const changes = Array.isArray(inner.changes) ? inner.changes : [];
                 const firstPath =
                     typeof changes[0]?.path === "string" ? path.basename(changes[0].path) : "?";
-                const rest = changes.length > 1 ? ` 外 ${changes.length - 1} 件` : "";
-                return `ファイル変更中: ${firstPath}${rest}`;
+                return {
+                    key: "server.status.fileChanging",
+                    params: { path: firstPath, count: changes.length },
+                };
             }
             if (itemType === "mcpToolCall") {
                 const name =
@@ -1030,9 +1090,9 @@ export class Session {
                         : typeof inner.tool === "string"
                           ? inner.tool
                           : "?";
-                return `MCP tool 実行中: ${name}`;
+                return { key: "server.status.mcpRunning", params: { name } };
             }
-            return `項目開始: ${itemType}`;
+            return { key: "server.status.itemStarted", params: { type: String(itemType) } };
         };
         const bestEffort = (
             op: Promise<unknown> | undefined,
@@ -1075,10 +1135,18 @@ export class Session {
                 this.#idleEscalationActive = true;
                 void (async () => {
                     try {
-                        const summary = `Codex から ${Math.round(
-                            idleMs / 1000,
-                        )} 秒間応答がありません。中断しますか?`;
-                        this.#progress(`[Codex 警告] ${summary} (音声で確認します)`, "warn");
+                        const seconds = Math.round(idleMs / 1000);
+                        const strings = getVoiceStrings(this.#activeConversationLanguage);
+                        const summary = strings.idleEscalation(seconds);
+                        this.#progress(
+                            {
+                                loc: {
+                                    key: "server.progress.codexIdleWarning",
+                                    params: { seconds },
+                                },
+                            },
+                            "warn",
+                        );
                         const decision = await voiceCoordinator.escalate(summary);
                         this.#idleEscalationActive = false;
                         this.#logger.log("session", "turn-idle-timeout-decision", {
@@ -1087,7 +1155,7 @@ export class Session {
                         if (decision === "accept") {
                             if (turnId) {
                                 bestEffort(
-                                    this.#bridge?.interruptTurn({
+                                    this.#bridge?.interruptTurn?.({
                                         threadId: this.#threadId,
                                         turnId,
                                     }),
@@ -1115,7 +1183,7 @@ export class Session {
         try {
             const effort = this.#settings.codexReasoningEffort;
             this.#logger.log("bridge", "turn-start", { message, effort });
-            this.#progress(`→ Codex: ${message}`, "info");
+            this.#progress({ text: `→ Codex: ${message}` }, "info");
             const turnArgs: Record<string, unknown> = {
                 threadId: this.#threadId,
                 input: [{ type: "text", text: message, text_elements: [] }],
@@ -1139,7 +1207,7 @@ export class Session {
                 switch (ev.type) {
                     case "turn-started": {
                         turnStartedAt = Date.now();
-                        sendCodexStatus("ターン開始");
+                        sendCodexStatus({ key: "server.status.turnStarted" });
                         // bridge payload shape is { type, turn: { threadId, turn: { id, ... } } }
                         // — the inner `turn` is the real Turn object.
                         const wrap = ev.turn as { turn?: { id?: unknown } } | undefined;
@@ -1149,27 +1217,27 @@ export class Session {
                         break;
                     }
                     case "turn-completed":
-                        sendCodexStatus("ターン完了");
+                        sendCodexStatus({ key: "server.status.turnCompleted" });
                         sawTurnCompleted = true;
                         this.#send({ type: "codex/turn", turnId: null });
                         break;
                     case "text-delta":
                         if (ev.kind === "text") {
-                            sendCodexStatus("テキスト生成中", true);
+                            sendCodexStatus({ key: "server.status.textGenerating" }, true);
                         } else if (ev.kind === "reasoning" || ev.kind === "reasoning-summary") {
-                            sendCodexStatus("推論中", true);
+                            sendCodexStatus({ key: "server.status.reasoning" }, true);
                         } else if (ev.kind === "plan") {
-                            sendCodexStatus("計画立案中");
+                            sendCodexStatus({ key: "server.status.planning" });
                         }
                         if (ev.kind === "text" && typeof ev.text === "string") {
                             accum.push(ev.text);
-                            this.#progress(ev.text, "info", true);
+                            this.#progress({ text: ev.text }, "info", true);
                             pendingNarrative += ev.text;
                             flushNarrativeIfReady(false);
                         }
                         break;
                     case "item-output-delta":
-                        sendCodexStatus("出力ストリーム中", true);
+                        sendCodexStatus({ key: "server.status.outputStreaming" }, true);
                         break;
                     case "item-started":
                     case "item-completed": {
@@ -1185,7 +1253,7 @@ export class Session {
                         sendCodexStatus(
                             ev.type === "item-started"
                                 ? summarizeItemStarted(ev.item)
-                                : "(項目完了)",
+                                : { key: "server.status.itemCompleted" },
                         );
                         if (
                             ev.type === "item-started" &&
@@ -1207,21 +1275,29 @@ export class Session {
                         break;
                     }
                     case "error":
-                        sendCodexStatus("エラー (継続)");
+                        sendCodexStatus({ key: "server.status.errorContinuing" });
                         flushNarrativeIfReady(true);
                         {
                             const errMsg = (ev.error as { message?: unknown })?.message;
+                            const detail =
+                                typeof errMsg === "string" && errMsg ? errMsg : "(no detail)";
                             this.#logger.log("bridge", "non-fatal-error", ev.error);
                             this.#progress(
-                                `[Codex 警告] bridge error: ${
-                                    typeof errMsg === "string" && errMsg ? errMsg : "(no detail)"
-                                }`,
+                                {
+                                    loc: {
+                                        key: "server.progress.codexBridgeError",
+                                        params: { message: detail },
+                                    },
+                                },
                                 "warn",
                             );
                         }
                         break;
                     default:
-                        sendCodexStatus(`event: ${ev.type}`);
+                        sendCodexStatus({
+                            key: "server.status.event",
+                            params: { type: ev.type },
+                        });
                         break;
                 }
             }
@@ -1230,7 +1306,7 @@ export class Session {
                 return {
                     status: "error",
                     text: accum.join(""),
-                    message: "turn exited before turn-completed",
+                    message: modelStrings.turnExitedBeforeCompleted,
                 };
             }
             return { status: "completed", text: accum.join("") };
@@ -1241,17 +1317,21 @@ export class Session {
                 const message =
                     err instanceof Error &&
                     err.message === "Codex turn idle timeout (user cancelled)"
-                        ? "idle timeout (user cancelled)"
-                        : "idle timeout";
+                        ? modelStrings.idleTimeoutUserCancelled
+                        : modelStrings.idleTimeout;
                 return { status: "error", text: accum.join(""), message };
             }
-            return { status: "error", text: accum.join(""), message: String(err) };
+            return {
+                status: "error",
+                text: accum.join(""),
+                message: modelStrings.rawError(String(err)),
+            };
         } finally {
             clearIdleTimer();
             this.#send({ type: "codex/turn", turnId: null });
             this.#send({
                 type: "codex/status",
-                text: "待機中",
+                loc: { key: "server.status.waiting" },
                 turnStartedAt: null,
                 lastEventAt: null,
             });
@@ -1265,7 +1345,7 @@ export class Session {
 
     // ---- helpers ----------------------------------------------------------
 
-    #setState(state: SessionState, message?: string): void {
+    #setState(state: SessionState, message?: LocOrText): void {
         const prev = this.#state;
         this.#state = state;
         this.#logger.log("session", "state-change", { from: prev, to: state, message });
@@ -1333,13 +1413,17 @@ export class Session {
         return result;
     };
 
-    #emitError(message: string, fatal: boolean): void {
-        this.#send({ type: "error", message, fatal });
-        if (fatal) this.#setState("error", message);
+    #emitError(body: LocOrText, fatal: boolean): void {
+        this.#send({ type: "error", body, fatal });
+        if (fatal) this.#setState("error", body);
     }
 
-    #progress(text: string, level: "info" | "warn" | "error" = "info", streaming?: boolean): void {
-        this.#send({ type: "codex/progress", text, level, streaming });
+    #progress(
+        body: LocOrText,
+        level: "info" | "warn" | "error" = "info",
+        streaming?: boolean,
+    ): void {
+        this.#send({ type: "codex/progress", body, level, streaming });
     }
 
     #send(msg: ServerToClientMessage): void {

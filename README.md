@@ -86,7 +86,20 @@ Gemini Live does not currently receive an STT language setting from this app. Ap
 
 ## Voice approval flow
 
-Risky operations (deletes, network calls, `sudo`, …) trigger a deterministic policy filter on the server. When the filter returns `escalate`, the agent is forced to ask the user out loud, then forced (via `tool_choice: "required"` + a single tool) to emit a `voice_approval_response` function call carrying the user's spoken decision. No modal — by design, for now. The protocol is structured so a modal can be added later without changing the wire format.
+Risky operations (deletes, network calls, `sudo`, …) are screened by a deterministic policy filter on the server (`server/src/approval-policy.ts`). The filter returns one of three verdicts:
+
+- **auto-accept** — routine workspace-local operations proceed without asking.
+- **auto-refuse** — outright dangerous operations (e.g. `rm -rf /`, prohibited tokens) are denied immediately.
+- **escalate** — the operation is handed to the **voice approval coordinator** (`server/src/voice-approval.ts`).
+
+When escalated, the coordinator runs a 2-phase out-of-band exchange in the configured **conversation language** (Settings → Conversation language; `en` / `ja` are fully supported, the rest fall back to the language-neutral `auto` bundle):
+
+1. A short **notice** ("Sorry, Codex needs your confirmation…") is spoken to grab the user's attention.
+2. The approval **question** is spoken (a one-sentence summary of what Codex wants to do, then "yes or no?"). Raw shell commands and full paths are intentionally never read aloud — only file basenames and natural-language summaries.
+
+The user's spoken reply is captured from the realtime transcript and classified **deterministically** by `server/src/i18n/decision.ts` (no LLM tool call involved). Yes/no detection is language-aware with a safety-first asymmetric matcher (negation-priority refuse, conservative accept). Ambiguous answers or genuine questions are routed to a clarification round (bounded by `MAX_CLARIFY` / `MAX_AMBIGUOUS`); exceeding the bound refuses as a safe terminal.
+
+The decision (`accept` / `refuse`) is returned to Codex immediately, then a short outcome ("Approved." / "Declined.") is spoken out of band. There is no on-screen modal — by design, for now. The protocol is structured so a modal could be added later without changing the wire format.
 
 ## Project layout
 

@@ -22,3 +22,4 @@ Thumbs.db
 # codex / runtime
 server/workspace/
 server/logs/
+tasks/

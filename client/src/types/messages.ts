@@ -41,7 +41,7 @@ export type ServerToClientMessage =
     | { type: "codex/turn"; turnId: string | null }
     | { type: "codex/tokenUsage"; tokenUsage: CodexTokenUsage }
     | { type: "realtime/tokenUsage"; usage: RealtimeUsage; costUsd: number }
-    | { type: "approval/notice"; summary: string; kind: string }
+    | { type: "approval/notice"; summary: string; kind: string; detail?: string }
     | { type: "audio/flush" }
     | {
           type: "settings";

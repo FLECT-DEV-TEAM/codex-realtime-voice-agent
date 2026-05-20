@@ -52,7 +52,16 @@ export const TranscriptPanel = () => {
                                 key={item.id}
                             >
                                 <span className="transcript-tag">{t("transcript.approval")}</span>
-                                <span>{item.summary}</span>
+                                <div className="transcript-approval-body">
+                                    <div className="transcript-approval-summary">
+                                        {item.summary}
+                                    </div>
+                                    {item.detail && (
+                                        <pre className="transcript-approval-detail">
+                                            {item.detail}
+                                        </pre>
+                                    )}
+                                </div>
                             </div>
                         );
                     }

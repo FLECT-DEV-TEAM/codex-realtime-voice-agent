@@ -25,6 +25,7 @@ import {
     type UsagePayload,
 } from "./providers/voice-provider.js";
 import { classifyApproval } from "./approval-policy.js";
+import { buildApprovalDisplayDetail } from "./approval-display-detail.js";
 import { VoiceApprovalCoordinator } from "./voice-approval.js";
 import { SessionLogger } from "./session-logger.js";
 import {
@@ -476,11 +477,13 @@ export class Session {
                     if (policy.verdict === "auto-accept") return { decision: "accept" };
                     if (policy.verdict === "auto-refuse") return { decision: "refuse" };
                     if (!this.#voiceCoordinator) return { decision: "refuse" };
-                    const approvalDetail = this.#buildApprovalDetail(
-                        String(kind),
+                    const approvalDetail = buildApprovalDisplayDetail({
+                        kind: String(kind),
                         params,
                         resolvedPaths,
-                    );
+                        workspace: this.#deps.codexCwd,
+                        labels: getVoiceStrings(this.#activeConversationLanguage).approvalDetail,
+                    });
                     // Serialise: Codex may fire several approval-requested
                     // callbacks at once. Ask them one at a time instead of
                     // letting the 2nd+ collide with the in-flight escalation
@@ -515,7 +518,7 @@ export class Session {
                             if (!coordinator || isStale()) {
                                 return { decision: "refuse" as const };
                             }
-                            this.#emitApprovalNotice(policy.summary, String(kind));
+                            this.#emitApprovalNotice(policy.summary, String(kind), approvalDetail);
                             // The agent may be mid-sentence on a progress
                             // narration. Force-stop it (cancel + flush the
                             // browser playback queue + truncate) so the
@@ -946,40 +949,6 @@ export class Session {
         // model-driven approval tool. Any other function call is ignored.
     };
 
-    #buildApprovalDetail = (kind: string, params: unknown, resolvedPaths?: string[]): string => {
-        const labels = getVoiceStrings(this.#activeConversationLanguage).approvalDetail;
-        const lines = [`${labels.kind}: ${kind}`];
-        const p = params as Record<string, unknown>;
-        if (kind === "fileChange" && resolvedPaths && resolvedPaths.length > 0) {
-            lines.push(
-                `${labels.fileTargets}:`,
-                ...resolvedPaths.map((filePath) =>
-                    path.isAbsolute(filePath)
-                        ? filePath
-                        : path.resolve(this.#deps.codexCwd, filePath),
-                ),
-            );
-            return lines.join("\n");
-        }
-        if (kind === "commandExecution") {
-            if (typeof p.command === "string") lines.push(`${labels.command}: ${p.command}`);
-            if (Array.isArray(p.command)) lines.push(`${labels.command}: ${p.command.join(" ")}`);
-            if (typeof p.cwd === "string") lines.push(`${labels.cwd}: ${p.cwd}`);
-            if (lines.length > 1) return lines.join("\n");
-        }
-        const raw = this.#safeStringify(params);
-        lines.push(raw.length > 1200 ? `${raw.slice(0, 1200)}...` : raw);
-        return lines.join("\n");
-    };
-
-    #safeStringify(value: unknown): string {
-        try {
-            return JSON.stringify(value, null, 2);
-        } catch {
-            return String(value);
-        }
-    }
-
     #logApprovalUtterance(
         text: string,
         kind: "accept" | "refuse" | "question" | "ambiguous",
@@ -1371,8 +1340,8 @@ export class Session {
         });
     }
 
-    #emitApprovalNotice(summary: string, kind: string): void {
-        this.#send({ type: "approval/notice", summary, kind });
+    #emitApprovalNotice(summary: string, kind: string, detail?: string): void {
+        this.#send({ type: "approval/notice", summary, kind, detail });
     }
 
     /** Wait until `responseActive` becomes false, or the timeout fires. */

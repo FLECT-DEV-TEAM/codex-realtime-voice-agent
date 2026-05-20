@@ -7,6 +7,7 @@ import { AudioManager } from "./audio/audio-manager.js";
 import { VoiceWsClient } from "./ws/client.js";
 import { useSessionStore, useSettingsStore } from "./state/store.js";
 import { buildSessionSettingsFromStore } from "./state/session-settings.js";
+import { applyApprovalNotice } from "./state/approval-message-handler.js";
 import { useT } from "./i18n/index.js";
 
 /**
@@ -100,7 +101,7 @@ export const App = () => {
                             setRealtimeUsage({ usage: msg.usage, costUsd: msg.costUsd });
                             return;
                         case "approval/notice":
-                            appendApprovalNotice(msg.summary, msg.kind);
+                            applyApprovalNotice(msg, { appendApprovalNotice });
                             return;
                         case "audio/flush":
                             // Barge-in: drop everything queued for playback

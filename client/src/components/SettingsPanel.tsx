@@ -7,6 +7,7 @@ import {
     type UiLocale,
 } from "../state/language-detection.js";
 import { useUiStore } from "../state/ui-store.js";
+import { InfoTooltip } from "./InfoTooltip.js";
 
 const OPENAI_MODELS = ["gpt-realtime-2", "gpt-realtime-1.5", "gpt-realtime", "gpt-realtime-mini"];
 const GEMINI_MODELS = [
@@ -193,13 +194,10 @@ export const SettingsPanel = () => {
                             </option>
                         ))}
                     </select>
-                    <span
-                        className="settings-info"
-                        role="img"
-                        tabIndex={0}
-                        aria-label={t("settings.info.conversationLanguage")}
-                        aria-describedby="stt-language-note"
-                        title={t("settings.note.conversationLanguage")}
+                    <InfoTooltip
+                        content={t("settings.note.conversationLanguage")}
+                        ariaLabel={t("settings.info.conversationLanguage")}
+                        describedById="stt-language-note"
                     >
                         <svg
                             viewBox="0 0 16 16"
@@ -226,10 +224,7 @@ export const SettingsPanel = () => {
                                 fill="currentColor"
                             />
                         </svg>
-                    </span>
-                    <span id="stt-language-note" className="visually-hidden">
-                        {t("settings.note.conversationLanguage")}
-                    </span>
+                    </InfoTooltip>
                 </div>
                 <div className="settings-field">
                     <label htmlFor="stt-noise" title={t("settings.title.noiseReduction")}>

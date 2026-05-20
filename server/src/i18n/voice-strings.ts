@@ -44,7 +44,10 @@ export interface VoiceStrings {
         ambiguousReprompt: string;
     };
     summarize: {
-        commandExec: (command: string) => string;
+        /** Audio summary for a commandExecution approval. `tokens` is the
+         *  decisively-shaped output of `extractCommandTokens` (verb +
+         *  basenamed args + optional sentinel), already sanitised. */
+        commandExec: (tokens: string[]) => string;
         fileChange: (kind: "delete" | "modify", paths: string[]) => string;
         fallback: (raw: string) => string;
         unknownKind: (kind: string) => string;
@@ -123,12 +126,20 @@ const jaStrings: VoiceStrings = {
         ambiguousReprompt: "すみません、はい か いいえ でお願いします。",
     },
     summarize: {
-        commandExec: (_command) => "コマンド実行の承認依頼です。詳細は確認画面に表示します。",
+        // tokens は extractCommandTokens の戻り値 (verb + basename + 最大 5 要素)。
+        // 空配列は extract できなかったときのフォールバックで、固定文を返す。
+        commandExec: (tokens) =>
+            tokens.length > 0
+                ? `${tokens.join(" ")} の承認依頼です。`
+                : "コマンド実行の承認依頼です。",
         fileChange: (kind, paths) =>
             kind === "delete"
                 ? `ファイル削除の承認依頼です。対象: ${basenameList(paths)}`
                 : `ファイル変更の承認依頼です。対象: ${basenameList(paths)}`,
-        fallback: (_raw) => "Codex が承認を求めています。詳細は確認画面に表示します。",
+        fallback: (raw) =>
+            raw.trim() === ""
+                ? "Codex が承認を求めています。"
+                : `Codex が承認を求めています ${raw}。`,
         unknownKind: (kind) => `${kind} 承認リクエスト`,
     },
     approvalDetail: {
@@ -192,14 +203,20 @@ const enStrings: VoiceStrings = {
         ambiguousReprompt: "Sorry, please answer yes or no.",
     },
     summarize: {
-        commandExec: (_command) =>
-            "Codex is asking to run a command. The full command is shown in the details.",
+        // tokens is the shape-controlled output of extractCommandTokens.
+        // Empty array falls back to a generic line.
+        commandExec: (tokens) =>
+            tokens.length > 0
+                ? `Codex is asking to run: ${tokens.join(" ")}.`
+                : "Codex is asking to run a command.",
         fileChange: (kind, paths) =>
             kind === "delete"
                 ? `Codex is asking to delete file(s): ${basenameList(paths)}`
                 : `Codex is asking to modify file(s): ${basenameList(paths)}`,
-        fallback: (_raw) =>
-            "Codex is asking for approval. The original request is shown in the details.",
+        fallback: (raw) =>
+            raw.trim() === ""
+                ? "Codex is asking for approval."
+                : `Codex is asking for approval ${raw}.`,
         unknownKind: (kind) => `${kind} approval request`,
     },
     approvalDetail: {

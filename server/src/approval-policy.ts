@@ -22,6 +22,7 @@
  */
 import type { ApprovalKind } from "codex-app-server-bridge";
 import type { VoiceStrings } from "./i18n/voice-strings.js";
+import { capLine, extractCommandTokens, redact } from "./approval-sanitize.js";
 
 export type PolicyVerdict = "auto-accept" | "escalate" | "auto-refuse";
 
@@ -129,29 +130,42 @@ export const classifyApproval = (
     return { verdict: "escalate", reason: "unknown kind", summary };
 };
 
+const SUMMARY_LIMIT = 200;
+
 const summarize = (input: PolicyInput, strings: VoiceStrings): string => {
-    const p = input.params as { command?: unknown; humanReadable?: unknown; reason?: unknown };
-    if (typeof p?.humanReadable === "string") {
-        return strings.summarize.fallback(p.humanReadable).slice(0, 200);
+    // Defensive: an approval-requested payload with params=null / non-object
+    // would otherwise crash the property reads below. Mirrors the same
+    // defensive cast used by buildApprovalDisplayDetail.
+    const p: { command?: unknown; humanReadable?: unknown; reason?: unknown } =
+        input.params && typeof input.params === "object"
+            ? (input.params as { command?: unknown; humanReadable?: unknown; reason?: unknown })
+            : {};
+
+    if (typeof p.humanReadable === "string") {
+        return capLine(strings.summarize.fallback(redact(p.humanReadable)), SUMMARY_LIMIT);
     }
+
     if (input.kind === "commandExecution") {
-        const cmd = p?.command;
-        if (typeof cmd === "string") return strings.summarize.commandExec(cmd).slice(0, 200);
-        if (Array.isArray(cmd)) {
-            return strings.summarize.commandExec(cmd.join(" ")).slice(0, 200);
-        }
+        // Decide what the audio LLM gets to see: the shape-controlled token
+        // list from approval-sanitize, NOT the raw command. The voice path
+        // never touches `p.command` directly anymore (spec §5.3, §7.3).
+        const tokens = extractCommandTokens(p.command as string | string[] | undefined);
+        return capLine(strings.summarize.commandExec(tokens), SUMMARY_LIMIT);
     }
+
     if (input.kind === "fileChange") {
         const paths = input.resolvedPaths ?? [];
         if (paths.length > 0) {
-            return strings.summarize
-                .fileChange(input.hasDelete ? "delete" : "modify", paths)
-                .slice(0, 200);
+            return capLine(
+                strings.summarize.fileChange(input.hasDelete ? "delete" : "modify", paths),
+                SUMMARY_LIMIT,
+            );
         }
-        const reason = typeof p?.reason === "string" ? `(${p.reason})` : "";
-        return strings.summarize.fallback(reason).slice(0, 200);
+        const reason = typeof p.reason === "string" ? `(${redact(p.reason)})` : "";
+        return capLine(strings.summarize.fallback(reason), SUMMARY_LIMIT);
     }
-    return strings.summarize.unknownKind(input.kind).slice(0, 200);
+
+    return capLine(strings.summarize.unknownKind(input.kind), SUMMARY_LIMIT);
 };
 
 const pathInWorkspace = (p: string, cwd: string): boolean => {

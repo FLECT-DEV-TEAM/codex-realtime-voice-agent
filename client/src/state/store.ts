@@ -50,6 +50,9 @@ export interface ApprovalNotice {
     id: string;
     summary: string;
     kind: string;
+    /** Sanitised display body (kind / command / cwd / fileTargets lines) sent
+     *  by the server. Absent for idle escalation and pre-detail server builds. */
+    detail?: string;
     timestamp: number;
 }
 
@@ -72,7 +75,7 @@ export interface SessionStore {
     setState: (state: SessionState, message?: LocOrText | null) => void;
     appendTranscript: (role: "user" | "assistant", text: string) => void;
     appendProgress: (body: LocOrText, level: ProgressLine["level"], streaming?: boolean) => void;
-    appendApprovalNotice: (summary: string, kind: string) => void;
+    appendApprovalNotice: (notice: { summary: string; kind: string; detail?: string }) => void;
     setServerSettings: (
         settings: SessionSettings,
         codexThreadId?: string,
@@ -161,11 +164,11 @@ export const useSessionStore = create<SessionStore>((set) => ({
             };
         }),
 
-    appendApprovalNotice: (summary, kind) =>
+    appendApprovalNotice: ({ summary, kind, detail }) =>
         set((s) => ({
             approvalNotices: [
                 ...s.approvalNotices,
-                { id: newId(), summary, kind, timestamp: Date.now() },
+                { id: newId(), summary, kind, detail, timestamp: Date.now() },
             ].slice(-50),
         })),
 

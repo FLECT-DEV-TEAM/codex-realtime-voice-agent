@@ -1,18 +1,15 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import {
+    detectInitialUiLocale,
+    readNavigatorLanguages,
+    type UiLocale,
+} from "./language-detection.js";
 
-export type UiLocale = "en" | "ja";
+export type { UiLocale } from "./language-detection.js";
+export { detectInitialUiLocale } from "./language-detection.js";
 
 export const UI_STORE_PERSIST_NAME = "codex-realtime-voice-agent.ui";
-
-export function detectInitialUiLocale(language?: string): UiLocale {
-    if (typeof language !== "string") return "en";
-    return language.toLowerCase().startsWith("ja") ? "ja" : "en";
-}
-
-function readNavigatorLanguage(): string | undefined {
-    return typeof navigator === "undefined" ? undefined : navigator.language;
-}
 
 interface UiStore {
     uiLocale: UiLocale;
@@ -22,7 +19,7 @@ interface UiStore {
 export const useUiStore = create<UiStore>()(
     persist(
         (set) => ({
-            uiLocale: detectInitialUiLocale(readNavigatorLanguage()),
+            uiLocale: detectInitialUiLocale(readNavigatorLanguages()),
             setUiLocale: (uiLocale) => set({ uiLocale }),
         }),
         {

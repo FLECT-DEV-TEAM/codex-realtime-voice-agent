@@ -77,6 +77,7 @@ export const enMessages = {
         "Changes only the app UI. It is separate from conversation language.",
     "settings.note.conversationLanguage":
         "en/ja are fully supported. ko/zh/es/fr/de have lightweight yes/no approval detection only; prompts, question detection, and speech use auto.",
+    "settings.info.conversationLanguage": "Language support details",
     "settings.placeholder.instructionsExtra":
         "(Optional) Add session-specific tone or instructions here",
     "settings.button.reset": "Reset to defaults",

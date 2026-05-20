@@ -193,8 +193,44 @@ export const SettingsPanel = () => {
                             </option>
                         ))}
                     </select>
+                    <span
+                        className="settings-info"
+                        role="img"
+                        tabIndex={0}
+                        aria-label={t("settings.info.conversationLanguage")}
+                        aria-describedby="stt-language-note"
+                        title={t("settings.note.conversationLanguage")}
+                    >
+                        <svg
+                            viewBox="0 0 16 16"
+                            width="14"
+                            height="14"
+                            aria-hidden="true"
+                            focusable="false"
+                        >
+                            <circle
+                                cx="8"
+                                cy="8"
+                                r="7"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                            />
+                            <circle cx="8" cy="4.5" r="0.9" fill="currentColor" />
+                            <rect
+                                x="7.2"
+                                y="6.8"
+                                width="1.6"
+                                height="5"
+                                rx="0.4"
+                                fill="currentColor"
+                            />
+                        </svg>
+                    </span>
+                    <span id="stt-language-note" className="visually-hidden">
+                        {t("settings.note.conversationLanguage")}
+                    </span>
                 </div>
-                <p className="settings-note">{t("settings.note.conversationLanguage")}</p>
                 <div className="settings-field">
                     <label htmlFor="stt-noise" title={t("settings.title.noiseReduction")}>
                         {t("settings.label.noiseReduction")}

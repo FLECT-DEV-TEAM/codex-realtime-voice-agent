@@ -78,6 +78,7 @@ export const jaMessages = {
     "settings.note.uiLanguage": "画面表示だけを切り替えます。会話言語とは別設定です。",
     "settings.note.conversationLanguage":
         "en/ja は完全対応。ko/zh/es/fr/de は yes/no 承認判定のみ簡易対応、プロンプト・質問判定・読み上げは auto 扱いです。",
+    "settings.info.conversationLanguage": "会話言語の対応状況について",
     "settings.placeholder.instructionsExtra": "(任意) このセッション特有の口調や注意点をここに書く",
     "settings.button.reset": "デフォルトに戻す",
     "settings.title.sts": "Speech-to-Speech (STS)",

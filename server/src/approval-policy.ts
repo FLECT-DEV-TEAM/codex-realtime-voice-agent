@@ -22,7 +22,20 @@
  */
 import type { ApprovalKind } from "codex-app-server-bridge";
 import type { VoiceStrings } from "./i18n/voice-strings.js";
-import { capLine, extractCommandTokens, redact } from "./approval-sanitize.js";
+import {
+    analyzeCommand,
+    capLine,
+    extractCommandTokens,
+    redact,
+    type CommandAnalysis,
+} from "./approval-sanitize.js";
+import {
+    DESTRUCTIVE_VERBS,
+    SECURITY_SENSITIVE_VERBS,
+    type RiskLabel,
+    type StructuralSignal,
+    type VerbRiskLabel,
+} from "./approval-risk-labels.js";
 
 export type PolicyVerdict = "auto-accept" | "escalate" | "auto-refuse";
 
@@ -42,26 +55,39 @@ export interface PolicyInput {
     hasDelete?: boolean;
 }
 
-const CRITICAL_PATTERNS: RegExp[] = [
-    /\brm\s/,
-    /\brmdir\b/,
-    /\bshutdown\b/,
-    /\breboot\b/,
-    /\bmkfs\b/,
-    /\bdd\s/,
-    /:\(\)\{:\|:&\};:/,
-    /\bgit\s+push\b/,
-    /\bgit\s+reset\s+--hard\b/,
-    /\bgit\s+clean\s+-f\b/,
-    /\bcurl\s/,
-    /\bwget\s/,
-    /\bscp\s/,
-    /\brsync\s/,
-    /\bssh\s/,
-    /\bsudo\b/,
-    /\bchmod\s+777\b/,
-    /\bchown\b/,
-];
+const CRITICAL_PATTERNS_MAP: ReadonlyMap<RegExp, VerbRiskLabel> = new Map([
+    [/\brm\s/, "file-delete"],
+    [/\brmdir\b/, "file-delete"],
+    [/\bshutdown\b/, "shutdown-reboot"],
+    [/\breboot\b/, "shutdown-reboot"],
+    [/\bmkfs\b/, "filesystem-format"],
+    [/\bdd\s/, "device-write"],
+    [/:\(\)\{:\|:&\};:/, "fork-bomb"],
+    [/\bgit\s+push\b/, "git-push"],
+    [/\bgit\s+reset\s+--hard\b/, "git-reset-hard"],
+    [/\bgit\s+clean\s+-f\b/, "git-clean-force"],
+    [/\bcurl\s/, "network-fetch"],
+    [/\bwget\s/, "network-fetch"],
+    [/\bscp\s/, "network-fetch"],
+    [/\brsync\s/, "remote-shell"],
+    [/\bssh\s/, "remote-shell"],
+    [/\bsudo\b/, "privileged"],
+    [/\bchmod\s+777\b/, "permission-change"],
+    [/\bchown\b/, "permission-change"],
+]);
+
+const STRUCTURAL_CRITICAL_SIGNALS: ReadonlySet<StructuralSignal> = new Set([
+    "shell-wrapper",
+    "command-substitution",
+    "find-exec",
+]);
+
+const STRUCTURAL_BLOCK_LLM_DETAIL: ReadonlySet<StructuralSignal> = new Set([
+    "truncated",
+    "overflowed",
+    "redirect",
+    "variable-expansion",
+]);
 
 const PROHIBITED_TOKENS = [
     "rm -rf /",
@@ -73,6 +99,67 @@ const PROHIBITED_TOKENS = [
     "/etc/shadow",
 ];
 
+export const detectRiskLabels = (
+    command: string | string[] | undefined,
+    analysis: CommandAnalysis,
+): {
+    riskLabels: RiskLabel[];
+    matchedCriticalPatterns: string[];
+    structuralSignals: StructuralSignal[];
+    auxiliarySignals: string[];
+} => {
+    const rawText =
+        typeof command === "string"
+            ? command
+            : Array.isArray(command)
+              ? command.filter((s): s is string => typeof s === "string").join(" ")
+              : "";
+
+    const matchedCriticalPatterns: string[] = [];
+    const verbLabels: VerbRiskLabel[] = [];
+    for (const [pattern, label] of CRITICAL_PATTERNS_MAP) {
+        if (pattern.test(rawText)) {
+            matchedCriticalPatterns.push(pattern.source);
+            if (!verbLabels.includes(label)) verbLabels.push(label);
+        }
+    }
+
+    const auxiliarySignals: string[] = [];
+    if (/`[^`]*`/.test(rawText)) auxiliarySignals.push("command-substitution-backtick");
+
+    const riskLabels: RiskLabel[] = [...analysis.structuralSignals, ...verbLabels];
+
+    return {
+        riskLabels,
+        matchedCriticalPatterns,
+        structuralSignals: analysis.structuralSignals,
+        auxiliarySignals,
+    };
+};
+
+const hasVerbLabel = (labels: readonly RiskLabel[], set: ReadonlySet<VerbRiskLabel>): boolean =>
+    labels.some((label) => set.has(label as VerbRiskLabel));
+
+export const isCritical = (labels: readonly RiskLabel[]): boolean => {
+    if (hasVerbLabel(labels, DESTRUCTIVE_VERBS)) return true;
+    if (hasVerbLabel(labels, SECURITY_SENSITIVE_VERBS)) return true;
+    if (labels.some((label) => STRUCTURAL_CRITICAL_SIGNALS.has(label as StructuralSignal))) {
+        return true;
+    }
+    if (
+        labels.includes("wildcard-expansion") &&
+        labels.some((label) => label === "file-delete" || label === "permission-change")
+    ) {
+        return true;
+    }
+    return false;
+};
+
+export const mustBlockLlmDetail = (labels: readonly RiskLabel[]): boolean => {
+    if (isCritical(labels)) return true;
+    return labels.some((label) => STRUCTURAL_BLOCK_LLM_DETAIL.has(label as StructuralSignal));
+};
+
 export const classifyApproval = (
     input: PolicyInput,
     strings: VoiceStrings,
@@ -81,6 +168,11 @@ export const classifyApproval = (
     reason: string;
     /** Short summary of the requested action for TTS readout. */
     summary: string;
+    riskLabels?: RiskLabel[];
+    matchedCriticalPatterns?: string[];
+    structuralSignals?: StructuralSignal[];
+    auxiliarySignals?: string[];
+    llmDetailBlocked?: boolean;
 } => {
     const summary = summarize(input, strings);
     const haystack = JSON.stringify(input.params ?? {}).toLowerCase();
@@ -100,16 +192,53 @@ export const classifyApproval = (
     }
 
     if (input.kind === "commandExecution") {
-        for (const pattern of CRITICAL_PATTERNS) {
+        const command = (input.params as { command?: unknown } | null | undefined)?.command;
+        const analysis = analyzeCommand(command);
+        const { riskLabels, matchedCriticalPatterns, structuralSignals, auxiliarySignals } =
+            detectRiskLabels(command as string | string[] | undefined, analysis);
+        const llmDetailBlocked = mustBlockLlmDetail(riskLabels);
+
+        for (const [pattern] of CRITICAL_PATTERNS_MAP) {
             if (pattern.test(haystack)) {
                 return {
                     verdict: "escalate",
                     reason: `critical pattern ${pattern.source}`,
                     summary,
+                    riskLabels,
+                    matchedCriticalPatterns,
+                    structuralSignals,
+                    auxiliarySignals,
+                    llmDetailBlocked,
                 };
             }
         }
-        return { verdict: "auto-accept", reason: "command is in routine set", summary };
+
+        const verdictSignals = structuralSignals.filter(
+            (signal) => signal !== "variable-expansion",
+        );
+        if (isCritical(verdictSignals) || mustBlockLlmDetail(verdictSignals)) {
+            return {
+                verdict: "escalate",
+                reason: `structural signal ${verdictSignals.join(",")}`,
+                summary,
+                riskLabels,
+                matchedCriticalPatterns,
+                structuralSignals,
+                auxiliarySignals,
+                llmDetailBlocked,
+            };
+        }
+
+        return {
+            verdict: "auto-accept",
+            reason: "command is in routine set",
+            summary,
+            riskLabels,
+            matchedCriticalPatterns,
+            structuralSignals,
+            auxiliarySignals,
+            llmDetailBlocked,
+        };
     }
 
     if (input.kind === "fileChange") {
@@ -140,6 +269,26 @@ const summarize = (input: PolicyInput, strings: VoiceStrings): string => {
         input.params && typeof input.params === "object"
             ? (input.params as { command?: unknown; humanReadable?: unknown; reason?: unknown })
             : {};
+
+    if (input.kind === "commandExecution") {
+        const analysis = analyzeCommand(p.command);
+        const { riskLabels } = detectRiskLabels(
+            p.command as string | string[] | undefined,
+            analysis,
+        );
+
+        if (isCritical(riskLabels)) {
+            return capLine(strings.summarize.commandExecRisky(riskLabels), SUMMARY_LIMIT);
+        }
+        if (
+            mustBlockLlmDetail(riskLabels) ||
+            analysis.truncated ||
+            analysis.overflowed ||
+            analysis.tokens.length === 0
+        ) {
+            return capLine(strings.summarize.commandExecTruncated(), SUMMARY_LIMIT);
+        }
+    }
 
     if (typeof p.humanReadable === "string") {
         return capLine(strings.summarize.fallback(redact(p.humanReadable)), SUMMARY_LIMIT);

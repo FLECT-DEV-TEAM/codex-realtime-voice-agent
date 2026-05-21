@@ -24,9 +24,9 @@ import {
     type ToolChoice,
     type UsagePayload,
 } from "./providers/voice-provider.js";
-import { classifyApproval } from "./approval-policy.js";
+import { classifyApproval, isCritical, mustBlockLlmDetail } from "./approval-policy.js";
 import { buildApprovalDisplayDetail } from "./approval-display-detail.js";
-import { VoiceApprovalCoordinator } from "./voice-approval.js";
+import { VoiceApprovalCoordinator, type VoiceApprovalHost } from "./voice-approval.js";
 import { SessionLogger } from "./session-logger.js";
 import {
     normalizeConversationLanguage,
@@ -34,7 +34,11 @@ import {
 } from "./i18n/conversation-language.js";
 import { classifyApprovalUtterance, isUserQuestion } from "./i18n/decision.js";
 import { getModelStrings } from "./i18n/model-strings.js";
-import { buildSystemInstructions, getVoiceStrings } from "./i18n/voice-strings.js";
+import {
+    buildSystemInstructions,
+    getVoiceStrings,
+    type VoiceStrings,
+} from "./i18n/voice-strings.js";
 import type {
     ClientToServerMessage,
     CodexTokenUsage,
@@ -245,6 +249,12 @@ type RealtimeProviderFactoryArgs = {
     logger: SessionLogger;
 };
 
+type VoiceApprovalCoordinatorFactoryArgs = {
+    realtime: VoiceProvider;
+    host: VoiceApprovalHost;
+    strings: VoiceStrings;
+};
+
 export interface SessionDeps {
     apiKey: string;
     geminiApiKey?: string;
@@ -255,6 +265,9 @@ export interface SessionDeps {
     logsDir: string;
     createBridge?: (config: ConstructorParameters<typeof CodexBridge>[0]) => CodexBridgeLike;
     createRealtimeProvider?: (args: RealtimeProviderFactoryArgs) => VoiceProvider;
+    createVoiceApprovalCoordinator?: (
+        args: VoiceApprovalCoordinatorFactoryArgs,
+    ) => VoiceApprovalCoordinator;
 }
 
 export class Session {
@@ -538,13 +551,31 @@ export class Session {
                                 return { decision: "refuse" as const };
                             }
                             try {
+                                if (policy.riskLabels && policy.riskLabels.length > 0) {
+                                    this.#logger.log("voice", "risk-detected", {
+                                        kind: String(kind),
+                                        riskLabels: policy.riskLabels,
+                                        matchedCriticalPatterns: policy.matchedCriticalPatterns,
+                                        structuralSignals: policy.structuralSignals,
+                                        auxiliarySignals: policy.auxiliarySignals,
+                                        llmDetailBlocked: policy.llmDetailBlocked,
+                                        decisionPath: isCritical(policy.riskLabels)
+                                            ? "risky-summary"
+                                            : mustBlockLlmDetail(policy.riskLabels)
+                                              ? "truncated-fallback"
+                                              : "normal",
+                                    });
+                                }
                                 this.#logger.log("voice", "escalate-start", {
                                     summary: policy.summary,
-                                    detail: approvalDetail,
+                                    detailLength: approvalDetail.length,
+                                    riskLabels: policy.riskLabels,
+                                    llmDetailBlocked: policy.llmDetailBlocked,
                                 });
                                 const d = await coordinator.escalate(
                                     policy.summary,
                                     approvalDetail,
+                                    policy.riskLabels,
                                 );
                                 this.#logger.log("voice", "escalate-resolved", { decision: d });
                                 return { decision: d };
@@ -667,13 +698,17 @@ export class Session {
                     this.#logger,
                 );
             }
-            this.#voiceCoordinator = new VoiceApprovalCoordinator(
-                this.#realtime,
-                {
-                    onInterrupt: () => this.#interruptPlayback(),
-                },
-                getVoiceStrings(this.#activeConversationLanguage),
-            );
+            const voiceApprovalHost = {
+                onInterrupt: () => this.#interruptPlayback(),
+            };
+            const voiceStrings = getVoiceStrings(this.#activeConversationLanguage);
+            this.#voiceCoordinator = this.#deps.createVoiceApprovalCoordinator
+                ? this.#deps.createVoiceApprovalCoordinator({
+                      realtime: this.#realtime,
+                      host: voiceApprovalHost,
+                      strings: voiceStrings,
+                  })
+                : new VoiceApprovalCoordinator(this.#realtime, voiceApprovalHost, voiceStrings);
 
             this.#realtime.on("audio", (chunk) => {
                 if (this.#suppressAudio) return;

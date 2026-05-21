@@ -11,6 +11,9 @@
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 import { WebSocket as WS } from "ws";
 import { Session } from "../src/session.js";
@@ -19,6 +22,8 @@ import {
     type RealtimeTool,
     type ToolChoice,
 } from "../src/providers/voice-provider.js";
+import { VoiceApprovalCoordinator } from "../src/voice-approval.js";
+import type { RiskLabel } from "../src/approval-risk-labels.js";
 
 type ResponseOptions = Parameters<VoiceProvider["createResponse"]>[0];
 type UpdateSessionPatch = Parameters<VoiceProvider["updateSession"]>[0];
@@ -100,6 +105,96 @@ const findApprovalNotice = (
         }
     }
     return undefined;
+};
+
+type LogRecord = {
+    src?: string;
+    ev?: string;
+    data?: unknown;
+};
+
+const readLogs = (logsDir: string): LogRecord[] => {
+    const files = fs
+        .readdirSync(logsDir)
+        .filter((name) => name.endsWith(".jsonl"))
+        .map((name) => path.join(logsDir, name));
+    return files.flatMap((file) =>
+        fs
+            .readFileSync(file, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as LogRecord),
+    );
+};
+
+const startSessionForApproval = async (options?: {
+    onCoordinator?: (coordinator: VoiceApprovalCoordinator) => void;
+}): Promise<{
+    approvalRequested: (request: ApprovalRequest) => Promise<{ decision: "accept" | "refuse" }>;
+    provider: FakeProvider;
+    session: Session;
+    turnGate: ReturnType<typeof createTurnGate>;
+    logsDir: string;
+}> => {
+    let approvalRequested:
+        | ((request: ApprovalRequest) => Promise<{ decision: "accept" | "refuse" }>)
+        | null = null;
+    let provider: FakeProvider | null = null;
+    const turnGate = createTurnGate();
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "session-approval-detail-"));
+
+    const ws = new FakeWs();
+    const session = new Session(
+        {
+            apiKey: "test-openai-key",
+            defaultModel: "gpt-realtime-2",
+            defaultVoice: "marin",
+            defaultGeminiModel: "gemini-live-2.5-flash-preview",
+            codexCwd: "/ws",
+            logsDir,
+            createBridge: (config) => {
+                approvalRequested = (
+                    config as unknown as {
+                        onApprovalRequested: (
+                            request: ApprovalRequest,
+                        ) => Promise<{ decision: "accept" | "refuse" }>;
+                    }
+                ).onApprovalRequested;
+                return {
+                    client: { onNotification: () => ({ dispose: () => undefined }) },
+                    connect: async () => undefined,
+                    startThread: async () => ({ thread: { id: "thread-1" } }),
+                    startTurn: turnGate.startTurn,
+                    close: async () => undefined,
+                };
+            },
+            createRealtimeProvider: ({ instructions }) => {
+                provider = new FakeProvider(instructions);
+                return provider;
+            },
+            createVoiceApprovalCoordinator: ({ realtime, host, strings }) => {
+                const coordinator = new VoiceApprovalCoordinator(realtime, host, strings);
+                options?.onCoordinator?.(coordinator);
+                return coordinator;
+            },
+        },
+        ws as unknown as WS,
+    );
+
+    ws.emit(
+        "message",
+        Buffer.from(
+            JSON.stringify({ type: "session/start", settings: { transcriptionLanguage: "ja" } }),
+        ),
+        false,
+    );
+    await tick();
+    await tick();
+    assert.ok(approvalRequested);
+    assert.ok(provider);
+
+    return { approvalRequested, provider, session, turnGate, logsDir };
 };
 
 test("approval/notice carries sanitised displayDetail for commandExecution", async () => {
@@ -282,4 +377,137 @@ test("approval/notice for permissions kind emits detail with kind-only body", as
     turnGate.release();
     await tick();
     await session.stop();
+});
+
+test("commandExecution escalation passes riskLabels into voice coordinator", async () => {
+    let capturedRiskLabels: RiskLabel[] | undefined;
+    const { approvalRequested, provider, session, turnGate } = await startSessionForApproval({
+        onCoordinator: (coordinator) => {
+            const originalEscalate = coordinator.escalate.bind(coordinator);
+            coordinator.escalate = ((summary, detail, riskLabels) => {
+                capturedRiskLabels = riskLabels;
+                return originalEscalate(summary, detail, riskLabels);
+            }) as typeof coordinator.escalate;
+        },
+    });
+
+    const approval = approvalRequested({
+        kind: "commandExecution",
+        method: "execCommand",
+        params: {
+            command: "rm README.md",
+            cwd: "/ws",
+        },
+    });
+
+    await tick();
+    assert.deepEqual(capturedRiskLabels, ["file-delete"]);
+
+    provider.emit("transcript", "いいえ", "user");
+    assert.deepEqual(await approval, { decision: "refuse" });
+
+    turnGate.release();
+    await tick();
+    await session.stop();
+});
+
+test("risk-detected audit log records labels and no raw command for risky escalation", async () => {
+    const { approvalRequested, provider, session, turnGate, logsDir } =
+        await startSessionForApproval();
+    const rawCommand = "rm README.md";
+
+    const approval = approvalRequested({
+        kind: "commandExecution",
+        method: "execCommand",
+        params: {
+            command: rawCommand,
+            cwd: "/ws",
+        },
+    });
+
+    await tick();
+    provider.emit("transcript", "いいえ", "user");
+    await approval;
+    turnGate.release();
+    await tick();
+    await session.stop();
+    await tick();
+
+    const event = readLogs(logsDir).find(
+        (entry) => entry.src === "voice" && entry.ev === "risk-detected",
+    );
+    assert.ok(event);
+    const data = event.data as Record<string, unknown>;
+    assert.equal(data.kind, "commandExecution");
+    assert.deepEqual(data.riskLabels, ["file-delete"]);
+    assert.deepEqual(data.structuralSignals, []);
+    assert.deepEqual(data.auxiliarySignals, []);
+    assert.equal(data.llmDetailBlocked, true);
+    assert.equal(data.decisionPath, "risky-summary");
+    assert.ok(Array.isArray(data.matchedCriticalPatterns));
+    assert.equal(JSON.stringify(data).includes(rawCommand), false);
+
+    const escalateStart = readLogs(logsDir).find(
+        (entry) => entry.src === "voice" && entry.ev === "escalate-start",
+    );
+    assert.ok(escalateStart);
+    const escalateData = escalateStart.data as Record<string, unknown>;
+    assert.equal(escalateData.detail, undefined);
+    assert.equal(typeof escalateData.detailLength, "number");
+    assert.equal(JSON.stringify(escalateData).includes(rawCommand), false);
+});
+
+test("risk-detected audit log uses truncated-fallback for blocked non-critical labels", async () => {
+    const { approvalRequested, provider, session, turnGate, logsDir } =
+        await startSessionForApproval();
+
+    const approval = approvalRequested({
+        kind: "commandExecution",
+        method: "execCommand",
+        params: {
+            command: "echo a && echo b",
+            cwd: "/ws",
+        },
+    });
+
+    await tick();
+    provider.emit("transcript", "いいえ", "user");
+    await approval;
+    turnGate.release();
+    await tick();
+    await session.stop();
+    await tick();
+
+    const event = readLogs(logsDir).find(
+        (entry) => entry.src === "voice" && entry.ev === "risk-detected",
+    );
+    assert.ok(event);
+    const data = event.data as Record<string, unknown>;
+    assert.deepEqual(data.riskLabels, ["truncated"]);
+    assert.equal(data.llmDetailBlocked, true);
+    assert.equal(data.decisionPath, "truncated-fallback");
+});
+
+test("risk-detected audit log is not emitted for safe command auto-accept", async () => {
+    const { approvalRequested, session, turnGate, logsDir } = await startSessionForApproval();
+
+    const approval = approvalRequested({
+        kind: "commandExecution",
+        method: "execCommand",
+        params: {
+            command: "npm test",
+            cwd: "/ws",
+        },
+    });
+
+    assert.deepEqual(await approval, { decision: "accept" });
+    turnGate.release();
+    await tick();
+    await session.stop();
+    await tick();
+
+    const event = readLogs(logsDir).find(
+        (entry) => entry.src === "voice" && entry.ev === "risk-detected",
+    );
+    assert.equal(event, undefined);
 });

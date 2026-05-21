@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    analyzeCommand,
     capDocument,
     capLine,
     displayCommand,
@@ -181,4 +182,289 @@ test("extractCommandTokens: empty / undefined / null inputs return []", () => {
     assert.deepEqual(extractCommandTokens(""), []);
     assert.deepEqual(extractCommandTokens(undefined), []);
     assert.deepEqual(extractCommandTokens(null), []);
+});
+
+test("analyzeCommand: detects structural signals without verb dictionary logic", () => {
+    const cases: Array<{
+        name: string;
+        input: unknown;
+        tokens?: string[];
+        signals: string[];
+        truncated?: boolean;
+        overflowed?: boolean;
+    }> = [
+        {
+            name: "shell wrapper bash -lc",
+            input: ["bash", "-lc", "find . -exec rm {} ;"],
+            tokens: ["bash", "-lc", "find . -exec rm {} ;"],
+            signals: ["shell-wrapper", "find-exec"],
+        },
+        {
+            name: "shell wrapper path basename",
+            input: "/bin/sh -c echo ok",
+            tokens: ["sh", "-c", "echo", "ok"],
+            signals: ["shell-wrapper"],
+        },
+        {
+            name: "shell wrapper xargs",
+            input: "xargs sh -c 'rm -rf /'",
+            tokens: ["xargs", "sh", "-c", "'rm", "…"],
+            signals: ["shell-wrapper", "quoted-token", "overflowed"],
+            overflowed: true,
+        },
+        {
+            name: "shell wrapper env assignment",
+            input: "env FOO=bar baz",
+            signals: ["shell-wrapper"],
+        },
+        {
+            name: "shell wrapper env short flag command",
+            input: "env -i baz",
+            signals: ["shell-wrapper"],
+        },
+        {
+            name: "shell wrapper env long flag command",
+            input: "env --unset=FOO baz",
+            signals: ["shell-wrapper"],
+        },
+        {
+            name: "env short flag without command is not shell wrapper",
+            input: "env -i",
+            signals: [],
+        },
+        {
+            name: "env long flag without command is not shell wrapper",
+            input: "env --null",
+            signals: [],
+        },
+        {
+            name: "env without assignment is not shell wrapper",
+            input: "env baz",
+            signals: [],
+        },
+        {
+            name: "command substitution dollar parens",
+            input: "echo $(pwd)",
+            signals: ["command-substitution"],
+        },
+        {
+            name: "command substitution backticks",
+            input: "echo `pwd`",
+            signals: ["command-substitution"],
+        },
+        {
+            name: "variable expansion simple",
+            input: "echo $HOME",
+            signals: ["variable-expansion"],
+        },
+        {
+            name: "variable expansion braces",
+            input: "echo ${HOME}",
+            signals: ["variable-expansion"],
+        },
+        {
+            name: "wildcard star",
+            input: "ls *.ts",
+            signals: ["wildcard-expansion"],
+        },
+        {
+            name: "wildcard single-quoted star is only quoted",
+            input: "ls '*.ts'",
+            signals: ["quoted-token"],
+        },
+        {
+            name: "wildcard double-quoted star is only quoted",
+            input: 'ls "*.ts"',
+            signals: ["quoted-token"],
+        },
+        {
+            name: "wildcard in unclosed single quote is detected",
+            input: "ls 'unclosed *.ts",
+            signals: ["wildcard-expansion", "quoted-token"],
+        },
+        {
+            name: "wildcard question mark",
+            input: "ls file?.ts",
+            signals: ["wildcard-expansion"],
+        },
+        {
+            name: "wildcard bracket",
+            input: "ls file[0-9].ts",
+            signals: ["wildcard-expansion"],
+        },
+        {
+            name: "quoted double token",
+            input: 'echo "hello world"',
+            signals: ["quoted-token"],
+        },
+        {
+            name: "quoted single token",
+            input: "echo 'hello world'",
+            signals: ["quoted-token"],
+        },
+        {
+            name: "redirect stdout",
+            input: "cat in > out",
+            tokens: ["cat", "in"],
+            signals: ["redirect", "truncated"],
+            truncated: true,
+        },
+        {
+            name: "redirect stderr",
+            input: "cmd 2> err.log",
+            tokens: ["cmd"],
+            signals: ["redirect", "truncated"],
+            truncated: true,
+        },
+        {
+            name: "redirect heredoc string",
+            input: "cmd <<< input",
+            tokens: ["cmd"],
+            signals: ["redirect", "truncated"],
+            truncated: true,
+        },
+        {
+            name: "pipeline is truncation but not redirect",
+            input: "cmd1 | cmd2",
+            tokens: ["cmd1"],
+            signals: ["truncated"],
+            truncated: true,
+        },
+        {
+            name: "embedded stderr redirect",
+            input: "cmd 2>/tmp/x",
+            tokens: ["cmd", "x"],
+            signals: ["redirect"],
+        },
+        {
+            name: "embedded stdout redirect",
+            input: "cmd >out",
+            tokens: ["cmd", ">out"],
+            signals: ["redirect"],
+        },
+        {
+            name: "redacted placeholder is not a redirect",
+            input: "TOKEN=<redacted> echo ok",
+            tokens: ["TOKEN=<redacted>", "echo", "ok"],
+            signals: [],
+        },
+        {
+            name: "spaced stdout redirect",
+            input: "cmd > out",
+            tokens: ["cmd"],
+            signals: ["redirect", "truncated"],
+            truncated: true,
+        },
+        {
+            name: "find exec",
+            input: "find . -exec echo {} ;",
+            tokens: ["find", ".", "-exec", "echo", "…"],
+            signals: ["find-exec", "truncated", "overflowed"],
+            truncated: true,
+            overflowed: true,
+        },
+        {
+            name: "find delete",
+            input: "find . -delete",
+            signals: ["find-exec"],
+        },
+        {
+            name: "find without exec or delete",
+            input: "find . -type f",
+            signals: [],
+        },
+        {
+            name: "overflowed token list",
+            input: "a b c d e",
+            tokens: ["a", "b", "c", "d", "…"],
+            signals: ["overflowed"],
+            overflowed: true,
+        },
+        {
+            name: "long token capped",
+            input: `echo ${"x".repeat(80)}`,
+            signals: ["truncated"],
+            truncated: true,
+        },
+        {
+            name: "redact happens after signal detection",
+            input: 'SECRET="$(pwd)" echo ok',
+            tokens: ["SECRET=<redacted>", "echo", "ok"],
+            signals: ["command-substitution", "quoted-token"],
+        },
+        {
+            name: "array command joins for structural detection",
+            input: ["bash", "-lc", "echo $HOME"],
+            signals: ["shell-wrapper", "variable-expansion"],
+        },
+        {
+            name: "plain command has no structural signal",
+            input: "git status -s",
+            signals: [],
+        },
+        {
+            name: "rm-staging script is not shell wrapper or substitution",
+            input: "./rm-staging.sh",
+            tokens: ["rm-staging.sh"],
+            signals: [],
+        },
+        {
+            name: "escaped dollar is not variable expansion",
+            input: String.raw`echo \$HOME`,
+            signals: [],
+        },
+        {
+            name: "control command separator truncates but is not redirect",
+            input: "cmd && other",
+            tokens: ["cmd"],
+            signals: ["truncated"],
+            truncated: true,
+        },
+    ];
+
+    for (const c of cases) {
+        const actual = analyzeCommand(c.input);
+        assert.deepEqual(actual.structuralSignals, c.signals, c.name);
+        assert.equal(actual.truncated, c.truncated ?? false, c.name);
+        assert.equal(actual.overflowed, c.overflowed ?? false, c.name);
+        if (c.tokens) assert.deepEqual(actual.tokens, c.tokens, c.name);
+    }
+});
+
+test("analyzeCommand: invalid or tokenless input falls back to truncated analysis", () => {
+    const expected = {
+        tokens: [],
+        structuralSignals: ["truncated"],
+        truncated: true,
+        overflowed: false,
+    };
+
+    assert.deepEqual(analyzeCommand(undefined), expected);
+    assert.deepEqual(analyzeCommand(null), expected);
+    assert.deepEqual(analyzeCommand(""), expected);
+    assert.deepEqual(analyzeCommand("   "), expected);
+    assert.deepEqual(analyzeCommand(123), expected);
+    assert.deepEqual(analyzeCommand({ command: "ls" }), expected);
+    assert.deepEqual(analyzeCommand([]), expected);
+    assert.deepEqual(analyzeCommand(["echo", 123]), expected);
+    assert.deepEqual(analyzeCommand(["bash", null]), expected);
+});
+
+test("analyzeCommand: token output remains compatible with extractCommandTokens", () => {
+    const cases: Array<string | string[] | undefined | null> = [
+        "rm README.md",
+        ["rm", "README.md"],
+        "git push origin main",
+        "rm -rf /path/to/dir",
+        "./script.sh a b c d",
+        "cat in > out.txt",
+        'TOKEN="abc def" rm x',
+        undefined,
+        null,
+        "",
+    ];
+
+    for (const input of cases) {
+        assert.deepEqual(analyzeCommand(input).tokens, extractCommandTokens(input));
+    }
 });

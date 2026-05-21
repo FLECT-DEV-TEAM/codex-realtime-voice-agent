@@ -1,5 +1,11 @@
 import path from "node:path";
 import {
+    DESTRUCTIVE_VERBS,
+    SECURITY_SENSITIVE_VERBS,
+    type RiskLabel,
+    type VerbRiskLabel,
+} from "../approval-risk-labels.js";
+import {
     normalizeConversationLanguage,
     type ConversationLanguage,
 } from "./conversation-language.js";
@@ -11,12 +17,15 @@ export interface ApprovalStepStrings {
 
 export interface QuestionStepStrings {
     instructions: string;
+    riskyInstructions: string;
     spokenInput: (summary: string) => string;
 }
 
 export interface ClarifyStepStrings {
     defaultQuestion: string;
     instructions: (question: string) => string;
+    blockedDetailInstructions: string;
+    blockedDetailResponse: string;
     spokenInput: (detail: string, question: string) => string;
 }
 
@@ -48,6 +57,8 @@ export interface VoiceStrings {
          *  decisively-shaped output of `extractCommandTokens` (verb +
          *  basenamed args + optional sentinel), already sanitised. */
         commandExec: (tokens: string[]) => string;
+        commandExecRisky: (labels: RiskLabel[]) => string;
+        commandExecTruncated: () => string;
         fileChange: (kind: "delete" | "modify", paths: string[]) => string;
         fallback: (raw: string) => string;
         unknownKind: (kind: string) => string;
@@ -74,6 +85,39 @@ ${strings.systemInstructions.codexProgressExplanation}`;
 }
 
 const basenameList = (paths: string[]): string => paths.map((p) => path.basename(p)).join(", ");
+const SUMMARY_LIMIT = 200;
+
+type RiskRoute = "destructive" | "securitySensitive" | "structuralOnly";
+
+const createRiskySummary = (
+    riskLabelDictionary: Record<RiskLabel, string>,
+    templates: Record<RiskRoute, (labels: string) => string>,
+    emptySummary: string,
+    separator: string,
+): ((labels: RiskLabel[]) => string) => {
+    const formatLabels = (labels: RiskLabel[], route: RiskRoute): string => {
+        for (let count = labels.length; count >= 1; count -= 1) {
+            const labelText = labels
+                .slice(0, count)
+                .map((label) => riskLabelDictionary[label])
+                .join(separator);
+            const suffix = count < labels.length ? "…" : "";
+            const summary = templates[route](`${labelText}${suffix}`);
+            if (summary.length <= SUMMARY_LIMIT) return summary;
+        }
+        return templates[route]("…").slice(0, SUMMARY_LIMIT);
+    };
+
+    return (labels) => {
+        if (labels.length === 0) return emptySummary;
+        const route = labels.some((label) => DESTRUCTIVE_VERBS.has(label as VerbRiskLabel))
+            ? "destructive"
+            : labels.some((label) => SECURITY_SENSITIVE_VERBS.has(label as VerbRiskLabel))
+              ? "securitySensitive"
+              : "structuralOnly";
+        return formatLabels(labels, route);
+    };
+};
 
 const jaStrings: VoiceStrings = {
     systemInstructions: {
@@ -98,6 +142,8 @@ const jaStrings: VoiceStrings = {
         question: {
             instructions:
                 "あなたの現在の唯一のタスクは、以下の承認依頼を「何をしようとしているのか」が伝わる自然な日本語で説明し、ユーザーに「はい」か「いいえ」で答えてもらうことです。\n\n読み上げ方の原則:\n- 生コマンドやフルパスは絶対に音声で読まない。\n- Codex が何をしようとしているのかを 1 文の日本語に要約する。技術用語は最小限に。\n- ファイル名は basename だけ言う。\n- 続けて「実行してもよろしいですか? はい か いいえ で答えてください。」と聞いて応答を終了する。\n\n直前までの会話の流れは無視してください。関数は呼ばないでください。読み上げ終わったら応答を終了してください。",
+            riskyInstructions:
+                "あなたの唯一のタスクは、以下の承認サマリを 1 字も変更せずそのまま読み上げ、応答を終了することです。関数は呼ばないでください。",
             spokenInput: (summary) =>
                 `[システム通知] Codex から承認依頼が届きました。次の内容をユーザーに音声で確認してください。\n\n承認依頼の概要: ${summary}\n\n1 文の日本語で要約し、最後に「実行してもよろしいですか? はい か いいえ で答えてください。」と続けて応答を終えてください。`,
         },
@@ -105,6 +151,9 @@ const jaStrings: VoiceStrings = {
             defaultQuestion: "詳細を教えて",
             instructions: (question) =>
                 `承認依頼の詳細データは次の通りです。ユーザーが「${question}」と質問しています。1 文で短く答えてください。答え終わったら「はい か いいえ で答えてください」と促してください。関数は呼ばないでください。`,
+            blockedDetailInstructions:
+                "次の一文だけを自然な日本語で短く話して応答を終了してください。余計な説明や関数呼び出しはしないでください。",
+            blockedDetailResponse: "詳細は画面で確認してください。",
             spokenInput: (detail, question) =>
                 `承認依頼の詳細データ:\n${detail}\n\nユーザーの質問:\n${question}\n\n1 文で短く答えてから、「はい か いいえ で答えてください」と促してください。`,
         },
@@ -132,6 +181,43 @@ const jaStrings: VoiceStrings = {
             tokens.length > 0
                 ? `${tokens.join(" ")} の承認依頼です。`
                 : "コマンド実行の承認依頼です。",
+        commandExecRisky: createRiskySummary(
+            {
+                "file-delete": "ファイル削除",
+                "device-write": "デバイス書き込み",
+                "filesystem-format": "ファイルシステム初期化",
+                "git-reset-hard": "git の強制リセット",
+                "git-clean-force": "git の強制クリーン",
+                "permission-change": "権限変更",
+                "shutdown-reboot": "電源操作",
+                "fork-bomb": "フォーク爆弾",
+                privileged: "特権実行",
+                "git-push": "git push",
+                "network-fetch": "ネットワーク取得",
+                "remote-shell": "リモート接続",
+                "shell-wrapper": "シェル経由",
+                "command-substitution": "コマンド置換",
+                "variable-expansion": "変数展開",
+                "wildcard-expansion": "ワイルドカード",
+                "quoted-token": "引用符",
+                redirect: "リダイレクト",
+                "find-exec": "find -exec",
+                truncated: "複数ステップ",
+                overflowed: "トークン超過",
+            },
+            {
+                destructive: (labels) =>
+                    `破壊的な可能性があります (${labels})。画面で詳細を確認してから、はい か いいえ で答えてください。`,
+                securitySensitive: (labels) =>
+                    `注意が必要なコマンドです (${labels})。画面で詳細を確認してから、はい か いいえ で答えてください。`,
+                structuralOnly: (labels) =>
+                    `複雑な構造のコマンドです (${labels})。画面で詳細を確認してから、はい か いいえ で答えてください。`,
+            },
+            "コマンドの承認依頼です。",
+            " / ",
+        ),
+        commandExecTruncated: () =>
+            "複数ステップを含むコマンドの承認依頼です。詳細を画面で確認してから、はい か いいえ で答えてください。",
         fileChange: (kind, paths) =>
             kind === "delete"
                 ? `ファイル削除の承認依頼です。対象: ${basenameList(paths)}`
@@ -175,6 +261,8 @@ const enStrings: VoiceStrings = {
         question: {
             instructions:
                 'Your only current task is to explain the approval request in natural English so the user understands what Codex wants to do, then ask for a yes or no answer.\n\nSpeaking rules:\n- Never read raw commands or full paths aloud.\n- Summarize what Codex is trying to do in one sentence. Keep technical terms minimal.\n- Mention only basenames for files.\n- End with: "May I let Codex proceed? Please answer yes or no."\n\nIgnore the previous conversation flow. Do not call functions. Stop after the question.',
+            riskyInstructions:
+                "Your only task is to read the following approval summary verbatim, then end the response. Do not call any functions.",
             spokenInput: (summary) =>
                 `[System notice] Codex has requested approval. Please confirm this for the user by voice.\n\nApproval request summary: ${summary}\n\nSummarize it in one natural English sentence, then end with: "May I let Codex proceed? Please answer yes or no."`,
         },
@@ -182,6 +270,9 @@ const enStrings: VoiceStrings = {
             defaultQuestion: "Please explain the details",
             instructions: (question) =>
                 `The approval request details are below. The user asked: "${question}". Answer in one short sentence, then prompt them to answer yes or no. Do not call functions.`,
+            blockedDetailInstructions:
+                "Read the following single sentence in natural English, then end the response. Do not add explanations or call any functions.",
+            blockedDetailResponse: "Please check the details on the screen.",
             spokenInput: (detail, question) =>
                 `Approval request details:\n${detail}\n\nUser question:\n${question}\n\nAnswer in one short sentence, then ask them to answer yes or no.`,
         },
@@ -209,6 +300,43 @@ const enStrings: VoiceStrings = {
             tokens.length > 0
                 ? `Codex is asking to run: ${tokens.join(" ")}.`
                 : "Codex is asking to run a command.",
+        commandExecRisky: createRiskySummary(
+            {
+                "file-delete": "file delete",
+                "device-write": "device write",
+                "filesystem-format": "filesystem format",
+                "git-reset-hard": "git hard reset",
+                "git-clean-force": "git clean -f",
+                "permission-change": "permission change",
+                "shutdown-reboot": "shutdown/reboot",
+                "fork-bomb": "fork bomb",
+                privileged: "privileged",
+                "git-push": "git push",
+                "network-fetch": "network fetch",
+                "remote-shell": "remote shell",
+                "shell-wrapper": "shell wrapper",
+                "command-substitution": "command substitution",
+                "variable-expansion": "variable expansion",
+                "wildcard-expansion": "wildcards",
+                "quoted-token": "quoted token",
+                redirect: "redirect",
+                "find-exec": "find -exec",
+                truncated: "multi-step",
+                overflowed: "overflow",
+            },
+            {
+                destructive: (labels) =>
+                    `This command may be destructive (${labels}). Please check the details on screen, then answer yes or no.`,
+                securitySensitive: (labels) =>
+                    `This command needs caution (${labels}). Please check the details on screen, then answer yes or no.`,
+                structuralOnly: (labels) =>
+                    `This command has a complex structure (${labels}). Please check the details on screen, then answer yes or no.`,
+            },
+            "This is a command approval request.",
+            ", ",
+        ),
+        commandExecTruncated: () =>
+            "This is a multi-step command approval request. Please check the details on screen, then answer yes or no.",
         fileChange: (kind, paths) =>
             kind === "delete"
                 ? `Codex is asking to delete file(s): ${basenameList(paths)}`

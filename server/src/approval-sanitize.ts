@@ -18,6 +18,7 @@
  * Spec: tasks/feature-plans/2026-05-20-approval-detail-display.v6.draft.md §7.5
  */
 import path from "node:path";
+import type { StructuralSignal } from "./approval-risk-labels.js";
 
 /** Sentinel inserted in place of a redacted env-like value. */
 const REDACTED = "<redacted>";
@@ -105,6 +106,13 @@ const TOKEN_LIMIT = 60;
 const MAX_ADOPTED_TOKENS = 4;
 const TOKEN_SENTINEL = "…";
 
+export interface CommandAnalysis {
+    tokens: string[];
+    structuralSignals: StructuralSignal[];
+    truncated: boolean;
+    overflowed: boolean;
+}
+
 /** Shorten `$HOME/...` to `~/...` for display. Returns the input unchanged if
  *  HOME is unset or absent from the path. */
 const replaceHomePrefix = (absolute: string): string => {
@@ -180,10 +188,83 @@ const SEPARATOR_TOKENS = new Set<string>([
     "<<<",
 ]);
 
+const REDIRECT_TOKENS = new Set<string>([">", ">>", "<", "<<", "2>", "2>>", "&>", "<<<"]);
+const SHELL_WRAPPER_NAMES = new Set(["bash", "sh", "zsh", "fish", "csh", "tcsh", "ksh", "xargs"]);
+const SHELL_EXEC_FLAGS = new Set(["-c", "-lc", "-cl", "-ec", "-ce", "-euc", "-uec"]);
+const ENV_ASSIGNMENT_PREFIX = /^[A-Z_][A-Z0-9_]*=/;
+
+const addSignal = (signals: StructuralSignal[], signal: StructuralSignal): void => {
+    if (!signals.includes(signal)) signals.push(signal);
+};
+
+const invalidCommandAnalysis = (): CommandAnalysis => ({
+    tokens: [],
+    structuralSignals: ["truncated"],
+    truncated: true,
+    overflowed: false,
+});
+
+const hasShellWrapper = (rawTokens: string[]): boolean => {
+    const [first, ...rest] = rawTokens;
+    if (!first) return false;
+    const shell = path.basename(first);
+    if (shell === "env") {
+        if (rest.some((token) => ENV_ASSIGNMENT_PREFIX.test(token))) return true;
+        return rest.some((token, idx) => {
+            if (!token.startsWith("-")) return false;
+            return rest
+                .slice(idx + 1)
+                .some((t) => !t.startsWith("-") && !ENV_ASSIGNMENT_PREFIX.test(t));
+        });
+    }
+    return SHELL_WRAPPER_NAMES.has(shell) && rest.some((token) => SHELL_EXEC_FLAGS.has(token));
+};
+
+const hasFindExec = (rawTokens: string[]): boolean =>
+    rawTokens.some((token) => token === "find" || path.basename(token) === "find") &&
+    rawTokens.some((token) => token === "-exec" || token === "-execdir" || token === "-delete");
+
+const unquotedTokenText = (token: string): string =>
+    token.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, "");
+
+const tokenHasWildcardExpansion = (token: string): boolean =>
+    /[*?\[]/.test(unquotedTokenText(token));
+
+const tokenHasRedirect = (token: string): boolean => {
+    const stripped = token.replace(/<redacted>/g, "");
+    if (REDIRECT_TOKENS.has(stripped)) return true;
+    if (!stripped) return false;
+    return /[12]?>>?|<<<|<<|&>/.test(stripped) && !REDIRECT_TOKENS.has(stripped);
+};
+
+const collectStructuralSignals = (
+    rawTokens: string[],
+    rawText: string,
+    separatorTruncated: boolean,
+    tokenCapped: boolean,
+    overflowed: boolean,
+): StructuralSignal[] => {
+    const signals: StructuralSignal[] = [];
+
+    if (hasShellWrapper(rawTokens)) addSignal(signals, "shell-wrapper");
+    if (/\$\([^)]*\)|`[^`]*`/.test(rawText)) addSignal(signals, "command-substitution");
+    if (/(^|[^\\])\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}\s]+\})/.test(rawText)) {
+        addSignal(signals, "variable-expansion");
+    }
+    if (rawTokens.some(tokenHasWildcardExpansion)) addSignal(signals, "wildcard-expansion");
+    if (/["']/.test(rawText)) addSignal(signals, "quoted-token");
+    if (rawTokens.some(tokenHasRedirect)) addSignal(signals, "redirect");
+    if (hasFindExec(rawTokens)) addSignal(signals, "find-exec");
+    if (separatorTruncated || tokenCapped) addSignal(signals, "truncated");
+    if (overflowed) addSignal(signals, "overflowed");
+
+    return signals;
+};
+
 /**
- * Extract a short, decisively-shaped token list for the audio summary.
+ * Analyze a command for audio-safe summary tokens and structural risk signs.
  *
- * Algorithm (spec §7.5.6):
+ * Token algorithm (spec §7.5.6):
  *  1. For a string input, apply {@link redact} to the *whole* command first,
  *     then split on whitespace. This is what keeps quote-bearing assignments
  *     like `TOKEN="abc def" rm x` from being torn apart at the inner space.
@@ -194,32 +275,71 @@ const SEPARATOR_TOKENS = new Set<string>([
  *     {@link TOKEN_LIMIT}.
  *  5. Keep at most {@link MAX_ADOPTED_TOKENS} adopted tokens; if the input had
  *     more, append a single `…` sentinel.
+ *
+ * The same pass also detects structural signs from the raw command text before
+ * verb-dictionary logic is applied.
  */
-export const extractCommandTokens = (cmd: string | string[] | undefined | null): string[] => {
-    if (cmd === undefined || cmd === null) return [];
+export const analyzeCommand = (cmd: unknown): CommandAnalysis => {
+    if (cmd === undefined || cmd === null) return invalidCommandAnalysis();
+    if (Array.isArray(cmd) && !cmd.every((s) => typeof s === "string")) {
+        return invalidCommandAnalysis();
+    }
+
+    const rawText = Array.isArray(cmd) ? cmd.join(" ") : typeof cmd === "string" ? cmd : "";
+
     let raw: string[];
     if (Array.isArray(cmd)) {
-        raw = cmd.filter((s): s is string => typeof s === "string");
+        raw = cmd;
     } else if (typeof cmd === "string") {
-        if (cmd.trim() === "") return [];
+        if (cmd.trim() === "") return invalidCommandAnalysis();
         const redactedWhole = redact(cmd);
         raw = redactedWhole.split(/\s+/).filter((t) => t.length > 0);
     } else {
-        return [];
+        return invalidCommandAnalysis();
     }
 
     const sepIdx = raw.findIndex((t) => SEPARATOR_TOKENS.has(t));
-    if (sepIdx >= 0) raw = raw.slice(0, sepIdx);
+    const separatorTruncated = sepIdx >= 0;
+    if (separatorTruncated) raw = raw.slice(0, sepIdx);
 
+    if (raw.length === 0) return invalidCommandAnalysis();
+
+    let tokenCapped = false;
     const tokens = raw.map((token) => {
         const r = redact(token);
         const e = escapeControl(r).replace(/\s+/g, " ").trim();
         const reduced = e.includes("/") ? path.basename(e) : e;
-        return capLine(reduced, TOKEN_LIMIT);
+        const capped = capLine(reduced, TOKEN_LIMIT);
+        tokenCapped ||= capped !== reduced;
+        return capped;
     });
 
+    const overflowed = tokens.length > MAX_ADOPTED_TOKENS;
+    const rawStructuralTokens = rawText.split(/\s+/).filter((t) => t.length > 0);
+    const structuralSignals = collectStructuralSignals(
+        rawStructuralTokens,
+        rawText,
+        separatorTruncated,
+        tokenCapped,
+        overflowed,
+    );
+
     if (tokens.length > MAX_ADOPTED_TOKENS) {
-        return [...tokens.slice(0, MAX_ADOPTED_TOKENS), TOKEN_SENTINEL];
+        return {
+            tokens: [...tokens.slice(0, MAX_ADOPTED_TOKENS), TOKEN_SENTINEL],
+            structuralSignals,
+            truncated: separatorTruncated || tokenCapped,
+            overflowed,
+        };
     }
-    return tokens;
+    return {
+        tokens,
+        structuralSignals,
+        truncated: separatorTruncated || tokenCapped,
+        overflowed,
+    };
 };
+
+/** Backwards-compatible token-only accessor for {@link analyzeCommand}. */
+export const extractCommandTokens = (cmd: string | string[] | undefined | null): string[] =>
+    analyzeCommand(cmd).tokens;

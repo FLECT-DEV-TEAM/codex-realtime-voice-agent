@@ -39,6 +39,8 @@ import {
 } from "./providers/openai-realtime-provider.js";
 import type { VoiceProvider } from "./providers/voice-provider.js";
 import type { VoiceStrings } from "./i18n/voice-strings.js";
+import { isCritical, mustBlockLlmDetail } from "./approval-policy.js";
+import type { RiskLabel } from "./approval-risk-labels.js";
 
 export type VoiceDecision = "accept" | "refuse";
 
@@ -58,6 +60,7 @@ interface PendingEscalation {
     reject: (err: Error) => void;
     summary: string;
     detail?: string;
+    riskLabels?: RiskLabel[];
 }
 
 export interface VoiceApprovalHost {
@@ -124,14 +127,18 @@ export class VoiceApprovalCoordinator {
         return this.#pending?.summary ?? null;
     }
 
-    escalate = (summary: string, detail?: string): Promise<VoiceDecision> => {
+    escalate = (
+        summary: string,
+        detail?: string,
+        riskLabels?: RiskLabel[],
+    ): Promise<VoiceDecision> => {
         if (this.#pending) {
             throw new Error(
                 "voice approval already in flight — concurrent escalation is not supported",
             );
         }
         const promise = new Promise<VoiceDecision>((resolve, reject) => {
-            this.#pending = { resolve, reject, summary, detail };
+            this.#pending = { resolve, reject, summary, detail, riskLabels };
         });
         this.#phase = "notice";
         this.#clarifyCount = 0;
@@ -177,11 +184,14 @@ export class VoiceApprovalCoordinator {
     /** Phase 2: summarise the actual approval request and ask yes/no. */
     #speakQuestion = (): void => {
         if (!this.#pending) return;
-        const { summary } = this.#pending;
+        const { summary, riskLabels } = this.#pending;
+        const isRisky = isCritical(riskLabels ?? []);
         this.#realtime.createResponse({
             conversation: "none",
             toolChoice: "none",
-            instructions: this.#strings.approval.question.instructions,
+            instructions: isRisky
+                ? this.#strings.approval.question.riskyInstructions
+                : this.#strings.approval.question.instructions,
             input: [
                 {
                     type: "message",
@@ -217,9 +227,38 @@ export class VoiceApprovalCoordinator {
             return;
         }
         const q = question.trim() || this.#strings.approval.clarify.defaultQuestion;
-        const detail = this.#pending.detail ?? this.#pending.summary;
         this.#phase = "clarifying";
+
+        const blocked = mustBlockLlmDetail(this.#pending.riskLabels ?? []);
+        if (blocked) {
+            this.#enqueueSpeak(() => this.#doClarifyBlocked());
+            return;
+        }
+
+        const detail = this.#pending.detail ?? this.#pending.summary;
         this.#enqueueSpeak(() => this.#doClarify(q, detail));
+    };
+
+    #doClarifyBlocked = async (): Promise<void> => {
+        await this.#host.onInterrupt();
+        if (!this.#pending || this.#phase !== "clarifying") return;
+        this.#realtime.createResponse({
+            conversation: "none",
+            toolChoice: "none",
+            instructions: this.#strings.approval.clarify.blockedDetailInstructions,
+            input: [
+                {
+                    type: "message",
+                    role: "user",
+                    content: [
+                        {
+                            type: "input_text",
+                            text: this.#strings.approval.clarify.blockedDetailResponse,
+                        },
+                    ],
+                },
+            ],
+        });
     };
 
     #doClarify = async (q: string, detail: string): Promise<void> => {

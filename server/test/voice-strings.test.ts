@@ -261,3 +261,14 @@ test("risky approval voice strings are complete for auto", () => {
         labelTerms: expectedEnLabelTerms,
     });
 });
+
+test("AC-8: ja / en / auto すべてに riskyInstructions / blockedDetail* / commandExecRisky / commandExecTruncated が定義されている", () => {
+    for (const lang of ["ja", "en", "auto"] as const) {
+        const strings = getVoiceStrings(lang);
+        assert.notEqual(strings.approval.question.riskyInstructions.trim(), "", lang);
+        assert.notEqual(strings.approval.clarify.blockedDetailInstructions.trim(), "", lang);
+        assert.notEqual(strings.approval.clarify.blockedDetailResponse.trim(), "", lang);
+        assert.equal(typeof strings.summarize.commandExecRisky, "function", lang);
+        assert.equal(typeof strings.summarize.commandExecTruncated, "function", lang);
+    }
+});

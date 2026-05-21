@@ -345,3 +345,98 @@ test("defensive: null params do not throw and yield the empty-token fallback", (
         "複数ステップを含むコマンドの承認依頼です。詳細を画面で確認してから、はい か いいえ で答えてください。",
     );
 });
+
+test("AC-1: bash -lc 内の find -exec rm -rf で音声サマリに「破壊的」が含まれる", () => {
+    const policy = classifyApproval(
+        baseInput({
+            method: "shell",
+            params: {
+                command:
+                    "/bin/bash -lc 'find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && test -z \"$(find . -mindepth 1 -print -quit)\"'",
+            },
+        }),
+        jaStrings,
+    );
+    assert.equal(policy.verdict, "escalate");
+    assert.match(policy.summary, /破壊的/);
+    assert.ok(policy.riskLabels?.includes("shell-wrapper"));
+    assert.ok(policy.riskLabels?.includes("file-delete"));
+});
+
+test("AC-3: rm README.md は file-delete を含む riskLabels で escalate", () => {
+    const policy = classifyApproval(
+        baseInput({ method: "shell", params: { command: "rm README.md" } }),
+        jaStrings,
+    );
+    assert.equal(policy.verdict, "escalate");
+    assert.ok(policy.riskLabels?.includes("file-delete"));
+    assert.match(policy.summary, /破壊的/);
+});
+
+test("AC-4: ls / git status / pwd は auto-accept で commandExec 経路", () => {
+    const cases = ["ls -la", "git status -s", "pwd"];
+    for (const command of cases) {
+        const policy = classifyApproval(
+            baseInput({ method: "shell", params: { command } }),
+            jaStrings,
+        );
+        assert.equal(policy.verdict, "auto-accept", command);
+        assert.deepEqual(policy.riskLabels, [], command);
+        assert.doesNotMatch(policy.summary, /破壊的|複数ステップ/, command);
+    }
+});
+
+test("AC-5: find . -name '*.md' のような切り捨て発生コマンドは commandExecTruncated", () => {
+    const policy = classifyApproval(
+        baseInput({ method: "shell", params: { command: "find . -name '*.md' -type f" } }),
+        jaStrings,
+    );
+    assert.equal(policy.verdict, "escalate");
+    assert.match(policy.summary, /複数ステップ/);
+    assert.ok(policy.riskLabels?.includes("overflowed"));
+});
+
+test("false positive 防止: rm-staging.sh / ls / git status / pwd / echo $PATH は escalate されない", () => {
+    const cases = [
+        "./rm-staging.sh deploy",
+        "ls -la",
+        "git status",
+        "git status -s",
+        "pwd",
+        "echo $PATH",
+        'echo "hello world"',
+    ];
+    for (const command of cases) {
+        const policy = classifyApproval(
+            baseInput({ method: "shell", params: { command } }),
+            jaStrings,
+        );
+        assert.equal(policy.verdict, "auto-accept", `${command} should auto-accept`);
+    }
+});
+
+test("verdict 接続: 構造的 critical コマンドは verb 辞書外でも escalate", () => {
+    const policy = classifyApproval(
+        baseInput({ method: "shell", params: { command: "bash -lc 'docker rmi $img'" } }),
+        jaStrings,
+    );
+    assert.equal(policy.verdict, "escalate");
+    assert.ok(policy.structuralSignals?.includes("shell-wrapper"));
+});
+
+test("verdict 接続: variable-expansion 単独は auto-accept (echo $PATH 等)", () => {
+    const policy = classifyApproval(
+        baseInput({ method: "shell", params: { command: "echo $PATH" } }),
+        jaStrings,
+    );
+    assert.equal(policy.verdict, "auto-accept");
+});
+
+test("auxiliarySignals: backtick 形式の command-substitution が記録される", () => {
+    const policy = classifyApproval(
+        baseInput({ method: "shell", params: { command: "echo `whoami`" } }),
+        jaStrings,
+    );
+    assert.ok(policy.auxiliarySignals?.includes("command-substitution-backtick"));
+    assert.ok(policy.structuralSignals?.includes("command-substitution"));
+});
